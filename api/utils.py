@@ -2,6 +2,8 @@ import base64
 import io
 import logging
 import urllib
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
