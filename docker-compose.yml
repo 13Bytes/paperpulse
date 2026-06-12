@@ -24,13 +24,18 @@ services:
     volumes:
       - ./blog/_posts:/app/blog/_posts  # write posts into the Jekyll tree
       - ./data:/app/data                 # pickle cache for dev mode
+      - codex-home:/app/.codex           # persisted Codex CLI auth/state
       - ./.env:/app/.env:ro
       - ./config.yaml:/app/config.yaml:ro
     environment:
       - PROJECT_ENV=${PROJECT_ENV:-dev}
       - PROJECT_DIR=/app
+      - LLM_BACKEND=${LLM_BACKEND:-openai_api}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      - CODEX_HOME=/app/.codex
+      - CODEX_MODEL=${CODEX_MODEL:-}
+      - CODEX_TIMEOUT_SECONDS=${CODEX_TIMEOUT_SECONDS:-900}
       - MANUAL_TRIGGERS_ALLOWED=true
     command: uvicorn api.server:app --host 0.0.0.0 --port 8000 --reload
 
@@ -44,13 +49,20 @@ services:
     volumes:
       - ./blog/_posts:/app/blog/_posts
       - ./data:/app/data
+      - codex-home:/app/.codex
       - ./.env:/app/.env:ro
       - ./config.yaml:/app/config.yaml:ro
     environment:
       - PROJECT_ENV=${PROJECT_ENV:-dev}
       - PROJECT_DIR=/app
+      - LLM_BACKEND=${LLM_BACKEND:-openai_api}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      - CODEX_HOME=/app/.codex
+      - CODEX_MODEL=${CODEX_MODEL:-}
+      - CODEX_TIMEOUT_SECONDS=${CODEX_TIMEOUT_SECONDS:-900}
     profiles:
       - run
 
+volumes:
+  codex-home:

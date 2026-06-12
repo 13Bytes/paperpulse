@@ -35,12 +35,17 @@ services:
     volumes:
       - ./blog/_posts:/app/blog/_posts  # write posts into the Jekyll tree
       - ./data:/app/data                 # pickle cache
+      - codex-home:/app/.codex           # persisted Codex CLI auth/state
       - ./config.yaml:/app/config.yaml:ro
     environment:
       - PROJECT_ENV=prod
       - PROJECT_DIR=/app
+      - LLM_BACKEND=${LLM_BACKEND:-openai_api}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      - CODEX_HOME=/app/.codex
+      - CODEX_MODEL=${CODEX_MODEL:-}
+      - CODEX_TIMEOUT_SECONDS=${CODEX_TIMEOUT_SECONDS:-900}
     # supercronic runs the crontab on the defined schedule
     command: supercronic /app/api/crontab
     restart: unless-stopped
@@ -50,3 +55,6 @@ services:
 networks:
   web:
     driver: bridge
+
+volumes:
+  codex-home:

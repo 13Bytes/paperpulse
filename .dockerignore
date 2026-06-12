@@ -1,3 +1,15 @@
 certbot/
 .env
 *.env
+.git/
+.codex/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+data/
+blog/_site/
+blog/.jekyll-cache/
+blog/.sass-cache/
+blog/.jekyll-metadata

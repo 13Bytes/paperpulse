@@ -1,11 +1,10 @@
-import pdfplumber
-import io
 import base64
-import fitz  # PyMuPDF
+import io
+import logging
 import urllib
-import os
-from PIL import Image
-import urllib.request as libreq
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 def extract_text_from_pdf(pdf_content):
     """
@@ -17,12 +16,16 @@ def extract_text_from_pdf(pdf_content):
     Returns:
         str: Extracted text.
     """
+    import pdfplumber
+
     text = ""
 
     pdf_stream = io.BytesIO(pdf_content)
     with pdfplumber.open(pdf_stream) as pdf:
         for page in pdf.pages:
-            text += page.extract_text() + "\n"
+            page_text = page.extract_text()
+            if page_text:
+                text += page_text + "\n"
     return text.strip()
 
 def extract_images_from_pdf_base64(pdf_content):
@@ -35,6 +38,9 @@ def extract_images_from_pdf_base64(pdf_content):
     Returns:
         list: A list of base64-encoded image strings.
     """
+    import fitz  # PyMuPDF
+    from PIL import Image
+
     images_base64 = []
 
     # Wrap the binary content in a BytesIO object
@@ -68,19 +74,19 @@ def download_pdf(pdf_url, filename):
         pdf_url (str): The URL of the PDF to download.
         filename (str): The filename to save the PDF as.
     """
-    filepath  = os.path.join('/tmp/',filename)
+    filepath = Path('/tmp') / filename
     try:
-        with urllib.request.urlopen(pdf_url) as response, open(filepath, 'wb') as outfile:
+        with urllib.request.urlopen(pdf_url) as response, filepath.open('wb') as outfile:
             outfile.write(response.read())
-        print(f"Successfully downloaded PDF to {filename}")
-        return filepath
+        logger.info("Successfully downloaded PDF to %s", filepath)
+        return str(filepath)
 
     except urllib.error.URLError as e:
-        print(f"Error: Could not download PDF from URL. {e}")
+        logger.error("Could not download PDF from URL: %s", e)
         return None
     except Exception as e:
-          print(f"An unexpected error occurred during PDF download: {e}")
-          return None
+        logger.exception("Unexpected error during PDF download: %s", e)
+        return None
 
 def normalize_text(text):
     """
@@ -146,9 +152,15 @@ def find_author_citations(text):
         matches = re.finditer(pattern, text)
         for match in matches:
             if 'et al.' in match.group():
-                citations.append((match.group(1), match.group(2), match.group()))  # (author, year, full_citation)
+                citations.append((match.group(1), match.group(2), match.group()))
             elif 'and' in match.group():
-                citations.append((f"{match.group(1)} and {match.group(2)}", match.group(3), match.group()))
+                citations.append(
+                    (
+                        f"{match.group(1)} and {match.group(2)}",
+                        match.group(3),
+                        match.group(),
+                    )
+                )
             else:
                 citations.append((match.group(1), match.group(2), match.group()))
     return citations
@@ -205,7 +217,7 @@ def add_markdown_links(text, paper_list):
             # We use word boundaries to ensure we match complete words
             import re
             pattern = re.compile(re.escape(original_title).replace(r'\ ', r'\s+'), re.IGNORECASE)
-            result = pattern.sub(lambda m: markdown_link, result)
+            result = pattern.sub(lambda _match, link=markdown_link: link, result)
     
     # Then handle author citations
     citations = find_author_citations(result)
@@ -219,7 +231,7 @@ def add_markdown_links(text, paper_list):
             if not paper_year:
                 continue
                 
-            last_names = get_last_names(paper['authors'])
+            last_names = get_last_names(paper.get('authors', []))
             
             # For "Author1 and Author2 (YEAR)" citations
             if ' and ' in author:

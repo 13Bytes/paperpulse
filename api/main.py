@@ -1,83 +1,91 @@
-import os
-import pickle
-import re
 import logging
-
-import urllib
-import urllib.request as libreq
-
-from datetime import datetime
-import xml.etree.ElementTree as ET
+from dataclasses import dataclass
 
 from dotenv import load_dotenv
-from api.utils import (
-    extract_text_from_pdf, 
-    extract_images_from_pdf_base64,
-    download_pdf,
-    add_markdown_links
-    )
-from api.arxiv_client import ArxivClient
-from api.agent import PaperpulseAgent
-from api.file_handler import FileHandler
-from api.settings import load_config, build_arxiv_query, ARXIV_SORT_BY, ARXIV_SORT_ORDER
 
+from api.arxiv_client import ArxivClient
+from api.file_handler import FileHandler
+from api.settings import (
+    ARXIV_SORT_BY,
+    ARXIV_SORT_ORDER,
+    build_arxiv_query,
+    load_app_settings,
+    load_config,
+)
+from api.summary_backend import create_summary_backend
+from api.utils import add_markdown_links
 from api.webs import create_blogpost
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(filename='myapp.log', level=logging.INFO)
-logger.setLevel(logging.INFO)
+logging.basicConfig(level=logging.INFO)
 
 
-def main():
+@dataclass(frozen=True)
+class PipelineResult:
+    ok: bool
+    message: str
+    num_papers: int = 0
+    post_path: str | None = None
+
+
+def main() -> PipelineResult:
     """
     Main function that orchestrates the retrieval and summarization process.
     """
 
-    load_dotenv()
-    dev_env=os.getenv("PROJECT_ENV")
-    logger.info(dev_env)
+    try:
+        load_dotenv()
+        settings = load_app_settings()
+        logger.info("Running Paperpulse in %s mode", settings.project_env)
+        logger.info("Using %s LLM backend", settings.llm_backend)
 
-    # load configuration
-    config = load_config()
-    search_query = build_arxiv_query(config)
-    logger.info(f'ArXiv query: {search_query}')
+        config = load_config()
+        search_query = build_arxiv_query(config)
+        logger.info("ArXiv query: %s", search_query)
 
-    # initialise
-    arxiv_client = ArxivClient(search_query, ARXIV_SORT_BY, ARXIV_SORT_ORDER)
-    llm_agent = PaperpulseAgent(config)
-    file_handler = FileHandler(os.getenv("PROJECT_DIR"))
-    papers = None
+        arxiv_client = ArxivClient(search_query, ARXIV_SORT_BY, ARXIV_SORT_ORDER)
+        llm_agent = create_summary_backend(config, settings)
+        file_handler = FileHandler(settings.data_dir)
+        papers = None
 
-    try:       
-        # if in dev mode, check to see if papers were downloaded earlier
-
-        if dev_env=='dev':
+        if settings.project_env == 'dev':
             papers = file_handler.load_papers()
-        
-        if not papers:        
-            logger.info('Retrieving daily results')
-            papers = arxiv_client.retrieve_daily_results()
-        
-            if dev_env=='dev':
-                file_handler.save_papers(papers)
-                
+
         if not papers:
-            logger.error('No papers retrieved')
-            return
-        
-        logger.info(f'Retrieved: {len(papers)} papers')
+            logger.info("Retrieving daily results")
+            papers = arxiv_client.retrieve_daily_results()
+
+            if settings.project_env == 'dev':
+                file_handler.save_papers(papers)
+
+        if not papers:
+            message = "No papers retrieved from ArXiv for the configured query"
+            logger.error(message)
+            return PipelineResult(ok=False, message=message)
+
+        logger.info("Retrieved %d papers", len(papers))
 
         summary = llm_agent.identify_important_papers(papers)
+        if not summary.strip():
+            message = "LLM backend returned an empty summary"
+            logger.error(message)
+            return PipelineResult(ok=False, message=message, num_papers=len(papers))
+
+        logger.info("Generated summary with %d characters", len(summary))
+
+        summary_linked = add_markdown_links(summary, papers)
+        post_path = create_blogpost(summary_linked, len(papers), config, settings=settings)
+        message = f"Created blog post from {len(papers)} papers: {post_path.name}"
+        logger.info(message)
+        return PipelineResult(
+            ok=True,
+            message=message,
+            num_papers=len(papers),
+            post_path=str(post_path),
+        )
     except Exception as e:
-        print(f'Exception: {e}')
-        return
-
-    # link papers mentioned in the summary to Arxiv
-    summary_linked = add_markdown_links(summary, papers)
-
-    # write the summary to a web page based on the day when the papers were retrieved
-    create_blogpost(summary_linked, len(papers), config)
+        logger.exception("Paperpulse pipeline failed: %s", e)
+        return PipelineResult(ok=False, message=f"{type(e).__name__}: {e}")
 
 if __name__ == "__main__":
     main()
-

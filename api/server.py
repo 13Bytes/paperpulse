@@ -13,21 +13,38 @@ Run (dev):
 
 import logging
 import os
+import re
 import threading
 from contextlib import asynccontextmanager
+from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+from api.settings import parse_bool
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-MANUAL_TRIGGERS_ALLOWED = os.getenv("MANUAL_TRIGGERS_ALLOWED", "false").strip().lower() == "true"
+MANUAL_TRIGGERS_ALLOWED = parse_bool(os.getenv("MANUAL_TRIGGERS_ALLOWED"))
 
 # --- Run-state tracking -------------------------------------------------------
 
 _run_lock = threading.Lock()
-_run_state: dict = {"running": False, "last_result": None}  # guarded by _run_lock
+_run_state: dict[str, Any] = {
+    "running": False,
+    "last_result": None,
+    "message": None,
+    "error": None,
+}  # guarded by _run_lock
+
+
+def _safe_message(message: object) -> str:
+    """Return a concise message suitable for the dev UI."""
+    text = str(message or "").strip() or "Pipeline failed without details."
+    text = re.sub(r"sk-[A-Za-z0-9_-]+", "[redacted-api-key]", text)
+    text = re.sub(r"sk-proj-[A-Za-z0-9_-]+", "[redacted-api-key]", text)
+    return text
 
 
 def _run_pipeline() -> None:
@@ -36,24 +53,30 @@ def _run_pipeline() -> None:
     # entire pipeline at module level (keeps startup fast and avoids side-effects).
     from api.main import main  # noqa: PLC0415
 
-    with _run_lock:
-        if _run_state["running"]:
-            return  # already in progress – skip
-        _run_state["running"] = True
-        _run_state["last_result"] = None
-
     try:
         logger.info("Manual trigger: pipeline started")
-        main()
-        result = "success"
-        logger.info("Manual trigger: pipeline finished")
+        pipeline_result = main()
+        if pipeline_result.ok:
+            result = "success"
+            message = pipeline_result.message
+            error = None
+            logger.info("Manual trigger: pipeline finished: %s", message)
+        else:
+            result = "error"
+            message = pipeline_result.message
+            error = _safe_message(pipeline_result.message)
+            logger.error("Manual trigger: pipeline failed: %s", error)
     except Exception as exc:  # noqa: BLE001
-        result = f"error: {exc}"
+        result = "error"
+        message = "Pipeline raised an unexpected exception"
+        error = _safe_message(f"{type(exc).__name__}: {exc}")
         logger.exception("Manual trigger: pipeline raised an exception")
     finally:
         with _run_lock:
             _run_state["running"] = False
             _run_state["last_result"] = result
+            _run_state["message"] = message
+            _run_state["error"] = error
 
 
 # --- App factory --------------------------------------------------------------
@@ -105,11 +128,18 @@ if MANUAL_TRIGGERS_ALLOWED:
         """
         with _run_lock:
             if _run_state["running"]:
-                return {"status": "already_running"}
+                return {
+                    "status": "already_running",
+                    "message": _run_state["message"] or "Pipeline is already running",
+                }
+            _run_state["running"] = True
+            _run_state["last_result"] = None
+            _run_state["message"] = "Pipeline queued"
+            _run_state["error"] = None
 
         thread = threading.Thread(target=_run_pipeline, daemon=True)
         thread.start()
-        return {"status": "started"}
+        return {"status": "started", "message": "Pipeline started"}
 
     @app.get("/trigger/status")
     def trigger_status() -> dict:
@@ -118,4 +148,6 @@ if MANUAL_TRIGGERS_ALLOWED:
             return {
                 "running": _run_state["running"],
                 "last_result": _run_state["last_result"],
+                "message": _run_state["message"],
+                "error": _run_state["error"],
             }

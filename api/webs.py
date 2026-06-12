@@ -1,12 +1,21 @@
-### Contains all of the code to take the summaries and 
-### create the blog post and place in the correct directory
+"""Create Jekyll blog posts from generated summaries."""
+
 from datetime import datetime
-import os
-from dotenv import load_dotenv
+from pathlib import Path
 
-load_dotenv()
+import yaml
 
-def create_blogpost(summary, num_papers, config=None):
+from api.settings import AppSettings, load_app_settings
+
+
+def create_blogpost(
+    summary: str,
+    num_papers: int,
+    config: dict | None = None,
+    settings: AppSettings | None = None,
+    date: datetime | None = None,
+    output_dir: str | Path | None = None,
+) -> Path:
     """
     Creates a markdown file with specified naming convention and writes content.
 
@@ -17,26 +26,31 @@ def create_blogpost(summary, num_papers, config=None):
     """
     if config is None:
         config = {}
+    if settings is None:
+        settings = load_app_settings()
+
     blog_cfg = config.get("blog", {})
     post_title = blog_cfg.get("post_title", "Daily Research Summary")
 
-    todays_date = datetime.now().strftime('%Y-%m-%d')
-    # Format the filename
+    todays_date = (date or datetime.now()).strftime('%Y-%m-%d')
     filename = f"{todays_date}-daily-summary.markdown"
-    
-    # Create the header with the current date
-    header = f"""---
-layout: post
-title: {post_title}
-date: {todays_date}
-categories: summary
-num_papers: {num_papers}
----
-"""
 
-    # Combine header and content
+    front_matter = yaml.safe_dump(
+        {
+            "layout": "post",
+            "title": post_title,
+            "date": todays_date,
+            "categories": "summary",
+            "num_papers": num_papers,
+        },
+        sort_keys=False,
+        allow_unicode=True,
+    ).strip()
+    header = f"---\n{front_matter}\n---\n"
     full_content = f"{header}\n\n{summary}"
-    
-    # Write to file
-    with open(os.path.join(os.getenv('PROJECT_DIR'),'blog/_posts/',filename), 'w') as file:
-        file.write(full_content)
+
+    posts_dir = Path(output_dir) if output_dir is not None else settings.posts_dir
+    posts_dir.mkdir(parents=True, exist_ok=True)
+    post_path = posts_dir / filename
+    post_path.write_text(full_content, encoding="utf-8")
+    return post_path
