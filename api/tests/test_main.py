@@ -1,7 +1,7 @@
 import json
 import subprocess
 import xml.etree.ElementTree as ET
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.error import URLError
@@ -166,7 +166,9 @@ class TestArxivClient:
         """
         client = ArxivClient(urlopen=lambda _url: FakeResponse(feed), sleep=lambda _seconds: None)
 
-        papers = client.retrieve_daily_results()
+        papers = client.retrieve_daily_results(
+            now=datetime(2026, 1, 2, 12, tzinfo=UTC)
+        )
 
         assert [paper["title"] for paper in papers] == ["Newest", "Still recent"]
 
@@ -478,10 +480,12 @@ def test_add_markdown_links_links_titles_and_author_citations():
 
 
 def test_download_pdf(monkeypatch, tmp_path):
-    monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("urllib.request.urlopen", lambda _url: FakeResponse(b"PDF content"))
+    monkeypatch.setattr("api.utils.tempfile.gettempdir", lambda: str(tmp_path))
 
-    assert download_pdf("http://example.com/paper.pdf", "test.pdf") == "/tmp/test.pdf"
+    expected_path = tmp_path / "test.pdf"
+    assert download_pdf("http://example.com/paper.pdf", "test.pdf") == str(expected_path)
+    assert expected_path.read_bytes() == b"PDF content"
 
 
 def test_create_blogpost_creates_directory_and_safe_front_matter(tmp_path):
@@ -507,3 +511,18 @@ def test_create_blogpost_creates_directory_and_safe_front_matter(tmp_path):
     assert front_matter["title"] == "Daily: Research Summary"
     assert front_matter["num_papers"] == 5
     assert "Test summary content" in content
+
+
+def test_jekyll_branding_comes_only_from_central_config():
+    project_root = Path(__file__).parents[2]
+    config_text = (project_root / "blog" / "_config.yml").read_text(encoding="utf-8")
+    # BaseLoader tolerates Jekyll's custom !ENV tag; scalar types are irrelevant here.
+    jekyll_config = yaml.load(config_text, Loader=yaml.BaseLoader)
+
+    assert not {"title", "tagline", "description"} & jekyll_config.keys()
+    assert (project_root / "blog" / "_plugins" / "paperpulse_config.rb").is_file()
+
+    expected_mount = "./config.yaml:/srv/jekyll/_data/paperpulse.yml:ro"
+    for compose_name in ("docker-compose.yml", "docker-compose.prod.yml"):
+        compose = yaml.safe_load((project_root / compose_name).read_text(encoding="utf-8"))
+        assert expected_mount in compose["services"]["blog"]["volumes"]

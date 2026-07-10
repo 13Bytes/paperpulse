@@ -119,6 +119,8 @@ docker compose run --rm api-run
 
 In `dev` mode (`PROJECT_ENV=dev`), retrieved papers are cached to a pickle file (`data/papers-<date>.pkl`). Re-running within the same day skips the ArXiv API call and reuses the cache, so only the LLM call is made on subsequent triggers.
 
+The Jekyll containers mount `config.yaml` as site data and load the `blog` branding fields at startup, so the central config remains the single source of truth.
+
 The `.env` file is bind-mounted read-only into the container so `python-dotenv` can load it automatically.
 
 If `LLM_BACKEND=codex_cli`, the dev API server and one-shot runner both use the same persisted `codex-home` Docker volume.

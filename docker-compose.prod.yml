@@ -21,6 +21,7 @@ services:
       - "4000:4000"
     volumes:
       - ./blog:/srv/jekyll
+      - ./config.yaml:/srv/jekyll/_data/paperpulse.yml:ro
     environment:
       - JEKYLL_ENV=production
       - MIXPANEL_TOKEN=${MIXPANEL_TOKEN}

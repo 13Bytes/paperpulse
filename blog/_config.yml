@@ -18,11 +18,8 @@
 # You can create any custom variable you would like, and they will be accessible
 # in the templates via {{ site.myvariable }}.
 
-title: Engineering Research Pulse
-tagline: Daily summaries of AI-aided engineering research
-description: >- # this means to ignore newlines until "baseurl:"
-  Daily ArXiv paper summaries focused on agentic engineering,
-  AI-aided design, simulation, and engineering automation.
+# Branding is loaded from config.yaml by _plugins/paperpulse_config.rb.
+# Docker Compose mounts that file at _data/paperpulse.yml.
 baseurl: "" # the subpath of your site, e.g. /blog
 url: "" # the base hostname & protocol for your site, e.g. http://example.com
 # Analytics

@@ -66,4 +66,8 @@ jobs:
         run: docker build -f Dockerfile.jekyll -t paperpulse-jekyll .
 
       - name: Build site
-        run: docker run --rm -e JEKYLL_ENV=production -v "$PWD/blog:/srv/jekyll" paperpulse-jekyll jekyll build --destination /tmp/_site
+        run: >-
+          docker run --rm -e JEKYLL_ENV=production
+          -v "$PWD/blog:/srv/jekyll"
+          -v "$PWD/config.yaml:/srv/jekyll/_data/paperpulse.yml:ro"
+          paperpulse-jekyll jekyll build --destination /tmp/_site

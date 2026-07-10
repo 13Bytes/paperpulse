@@ -1,6 +1,7 @@
 import base64
 import io
 import logging
+import tempfile
 import urllib
 import urllib.error
 import urllib.request
@@ -70,13 +71,13 @@ def extract_images_from_pdf_base64(pdf_content):
 
 def download_pdf(pdf_url, filename):
     """
-    Downloads a PDF from a given URL and saves it to /tmp/filename
+    Downloads a PDF from a given URL and saves it to the platform temp directory.
 
     Args:
         pdf_url (str): The URL of the PDF to download.
         filename (str): The filename to save the PDF as.
     """
-    filepath = Path('/tmp') / filename
+    filepath = Path(tempfile.gettempdir()) / filename
     try:
         with urllib.request.urlopen(pdf_url) as response, filepath.open('wb') as outfile:
             outfile.write(response.read())

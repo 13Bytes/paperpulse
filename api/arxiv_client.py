@@ -55,11 +55,12 @@ class ArxivClient:
         max_results: int = 50,
         max_retries: int = 5,
         result_limit: int = 1200,
+        now: datetime | None = None,
     ) -> list[Paper]:
         """
-        Retrieves all result for the last day.
-        Retrieves results 10 at a time, starting from a week ago and continuing
-        till the latest paper is retrieved. 
+        Retrieve papers updated within the previous 24 hours.
+        Results are fetched in descending update order until the first entry at
+        or before the cutoff is encountered.
 
         Args:
             None
@@ -69,7 +70,11 @@ class ArxivClient:
         """
         papers = []
         desired_timezone = UTC
-        one_day_ago = None
+        now = now or datetime.now(desired_timezone)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=desired_timezone)
+        one_day_ago = now.astimezone(desired_timezone) - timedelta(days=1)
+        logger.info("Retrieving papers updated after %s", one_day_ago)
 
         start = 0
 
@@ -147,10 +152,6 @@ class ArxivClient:
                 updated_date_str = entry.find(f'{ATOM_NS}updated').text
                 updated_date = datetime.strptime(updated_date_str, '%Y-%m-%dT%H:%M:%S%z')
                 updated_date = updated_date.astimezone(desired_timezone)
-
-                if not one_day_ago:
-                    one_day_ago = updated_date - timedelta(days=1)
-                    logger.info("Retrieving new/updated papers until %s", one_day_ago)
 
                 if updated_date > one_day_ago:
                     papers.append(self._process_paper_entry(entry))
