@@ -1,207 +1,152 @@
-# Paperpulse - Daily ArXiv Research Summariser
+# Paperpulse
 
-Paperpulse retrieves new papers from ArXiv every day, groups them into themes using the **OpenAI Agents SDK**, and publishes the result as a Jekyll blog post.
+Paperpulse is a multi-user ArXiv research reader. It generates shared daily reports for
+administrator-approved topics and a weekly synthesis for each topic. Visitors choose the topics
+they care about without creating an account; optional passwordless email sign-in synchronizes
+those choices and enables community proposals.
 
-The search scope, summarisation persona, and blog branding are all controlled via `config.yaml` — no code changes needed.
+## What changed
 
-## Features
+The original Jekyll site has been replaced by a server-rendered FastAPI application backed by
+SQLite. The existing ArXiv retrieval and OpenAI Agents SDK/Codex CLI summarizers are retained,
+but report generation now runs independently for every active topic.
 
-- Configurable ArXiv search by category and/or keyword (see `config.yaml`)
-- Two-stage summarisation pipeline: batch summaries → single merged post
-- Automatic hyperlinks from the summary text back to the ArXiv paper pages
-- Jekyll blog served via Docker; production deployment uses a built-in cron scheduler
+- Anonymous topic selection stored in a signed browser cookie
+- Magic-link accounts for cross-browser synchronization
+- Public topic catalog, topic archives, daily reports, and weekly reports
+- Moderated topic, ArXiv category, and keyword proposals
+- Administrator dashboard with curated topic creation and archiving
+- SQLite persistence with Alembic migrations, foreign keys, and WAL mode
+- Daily jobs at 06:00 UTC and Monday weekly jobs at 07:00 UTC
+- One-time import of the existing `config.yaml` topic and Jekyll posts
 
-## Requirements
+## Local development
 
-- Docker (both dev and prod run entirely in containers)
-- An OpenAI API key, or a persisted Codex CLI login for the experimental Codex backend
+Requirements: Docker and an existing Codex CLI login. Copy `.env.example` to `.env`, change
+`SESSION_SECRET`, and set `ADMIN_EMAILS` to the address that should become the first admin.
+Development defaults `MAGIC_LINK_DEBUG=true`, so the sign-in page displays the generated link
+when SMTP is not configured. Never enable that option in production.
 
-For local development outside Docker, use Python 3.11+ with a virtual environment and the packages in `api/requirements-dev.txt`.
-
-## Configuration
-
-All user-facing settings live in `config.yaml`:
-
-| Section | What it controls |
-|---|---|
-| `blog` | Site title, tagline, and per-post front-matter title |
-| `search.categories` | ArXiv category codes to include |
-| `search.keywords` | Free-text keyword filters (matched against title and abstract) |
-| `search.mode` | How categories and keywords are combined (`categories_and_keywords`, `categories_only`, `keywords_only`) |
-| `summarization.persona` | Opening of the LLM system prompt — sets expertise framing |
-| `summarization.style` | Tone and explanation style injected after the persona |
-
-Secrets and environment-specific values stay in `.env` (never committed):
-
-```
-OPENAI_API_KEY=sk-...
-PROJECT_ENV=dev          # dev | prod
-PROJECT_DIR=/path/to/paperpulse
-LLM_BACKEND=openai_api    # openai_api | codex_cli
-MIXPANEL_TOKEN=...       # optional analytics
-```
-
-The default `openai_api` backend uses `OPENAI_API_KEY` and `OPENAI_MODEL` (default: `gpt-4o-mini`).
-
-### LLM backends
-
-#### OpenAI API backend
-
-This is the default and production-stable path. Set:
+Build the application and run migrations:
 
 ```bash
-LLM_BACKEND=openai_api
-OPENAI_API_KEY=sk-...
-OPENAI_MODEL=gpt-4o-mini
-```
-
-#### Codex CLI backend
-
-This experimental backend runs `codex exec` inside the API container and reuses a persisted ChatGPT/Codex login from `CODEX_HOME`. It is intended for a trusted self-hosted server where the whole daily summariser uses the account of whoever performed setup.
-
-Set:
-
-```bash
-LLM_BACKEND=codex_cli
-CODEX_HOME=/app/.codex
-CODEX_MODEL=             # optional; leave empty for Codex default
-CODEX_TIMEOUT_SECONDS=900
-```
-
-Then build the API image and log in once:
-
-```bash
-docker compose build api
-docker compose run --rm api-run codex login --device-auth
-```
-
-The compose files mount `/app/.codex` as a Docker named volume, so the login survives normal container recreation and image rebuilds. `docker compose down -v` removes named volumes and will require logging in again.
-
-Treat `$CODEX_HOME/auth.json` like a password: do not commit it, paste it into tickets, or share it in chat.
-
-## Development vs Production
-
-### Development (`docker-compose.yml`)
-
-Intended for local iteration. The Jekyll blog is served with `--livereload` so changes to `blog/` are reflected immediately.
-
-`docker compose up` starts both the blog and a persistent API server:
-
-| Service | Port | Purpose |
-|---|---|---|
-| `blog` | 4000 | Jekyll site with live-reload |
-| `api` | 8000 | FastAPI server — handles manual pipeline triggers |
-
-```bash
-# First start, or after changing Python code / requirements
 docker compose up --build
-
-# Subsequent starts (config/template changes only)
-docker compose up
 ```
 
-> **Always use `--build`** after editing Python source files, `api/requirements.txt`, or the `Dockerfile`. Without it, Docker reuses the cached image and your changes won't be picked up.
+The application is available at `http://localhost:4000`. The scheduler is opt-in during
+development:
 
-#### Manual trigger (dev only)
-
-The API server runs with `MANUAL_TRIGGERS_ALLOWED=true`, which activates a **▶ Run Update Now** button at the bottom of the blog home page (`http://localhost:4000`). Clicking it fires the full ArXiv → LLM → blog post pipeline in the background and polls for completion, showing live status feedback in the UI. Jekyll's live-reload then picks up the new post automatically.
-
-The trigger is intentionally dev-only:
-- The button is rendered only when `JEKYLL_ENV=development`
-- The `/trigger` route is **not registered at all** when `MANUAL_TRIGGERS_ALLOWED` is unset or `false` — it returns 404 and cannot be reached via Postman or any other client
-- Production compose does not set this variable
-
-To invoke the pipeline without the UI:
 ```bash
-# One-shot run (no HTTP server)
-docker compose run --rm api-run
+docker compose --profile scheduler up --build
 ```
 
-In `dev` mode (`PROJECT_ENV=dev`), retrieved papers are cached to a pickle file (`data/papers-<date>.pkl`). Re-running within the same day skips the ArXiv API call and reuses the cache, so only the LLM call is made on subsequent triggers.
-
-The Jekyll containers mount `config.yaml` as site data and load the `blog` branding fields at startup, so the central config remains the single source of truth.
-
-The `.env` file is bind-mounted read-only into the container so `python-dotenv` can load it automatically.
-
-If `LLM_BACKEND=codex_cli`, the dev API server and one-shot runner both use the same persisted `codex-home` Docker volume.
-
-### Local Python development
+Log the shared summarizer into Codex once. The named volume persists the login:
 
 ```bash
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install -U pip
-python -m pip install -r api/requirements-dev.txt
+docker compose run --rm jobs codex login --device-auth
 ```
 
-Useful local checks:
+Run report jobs manually:
 
 ```bash
-pytest
-ruff check api
-python -m compileall -q api
+docker compose run --rm jobs python -m api.jobs daily
+docker compose run --rm jobs python -m api.jobs weekly
 ```
 
-### Production (`docker-compose.prod.yml`)
+The job runner uses `LLM_BACKEND=codex_cli` by default. `openai_api` remains supported when a
+deployment explicitly configures it.
 
-Intended for a server deployment (e.g. an LXC container behind Nginx Proxy Manager). Key differences from dev:
+## Initial import
 
-| Aspect | Dev | Prod |
-|---|---|---|
-| Jekyll image | Pre-built `jekyll/jekyll:4` | Custom image built from `Dockerfile.jekyll` |
-| Jekyll command | `jekyll serve --livereload` | Built as a static site; served by Jekyll's production server |
-| API invocation | HTTP server + manual trigger button | Automatic — `supercronic` runs the crontab on schedule |
-| Cron schedule | — | Daily at 06:00 UTC (`api/crontab`) |
-| `.env` mount | Yes (read-only) | No — env vars are passed directly in the compose file |
-| Restart policy | — | `unless-stopped` on both services |
-| Networking | Default bridge | Named `web` bridge network |
-
-SSL termination and domain routing are handled externally by Nginx Proxy Manager; this stack only exposes port 4000 on the host.
+After migrations, import the original configuration and Jekyll posts once:
 
 ```bash
-# Start the production stack (detached)
+docker compose run --rm jobs python -m api.importer --topic-name "AI for Engineering"
+```
+
+The importer is idempotent. It creates an active topic from the categories and keywords in
+`config.yaml`, imports existing files from `blog/_posts`, and registers redirects for their
+original Jekyll URLs. Keep the `blog` directory until this import has completed and been checked.
+
+Further topics such as AI General or 3D Printing should be created in the admin interface with
+deliberately chosen categories and keywords.
+
+## Accounts and administration
+
+Visitors can choose topics immediately. Signing in merges the browser selection with the
+account's saved subscriptions. New topics require a name, description, at least one valid ArXiv
+category, and at least one keyword. Later category and keyword suggestions follow the same review
+process.
+
+Email addresses listed in the comma-separated `ADMIN_EMAILS` variable receive administrator
+rights after completing magic-link verification. Administrators can:
+
+- approve or reject proposed topics and their initial terms as one bundle;
+- approve or reject later category and keyword suggestions individually;
+- create active curated topics directly and add approved terms;
+- archive topics without deleting historical reports.
+
+Rejected proposals require a review reason and remain visible to their proposer.
+
+## Production
+
+Set all required values referenced by `docker-compose.prod.yml`, especially:
+
+- `PUBLIC_BASE_URL` with the external HTTPS origin
+- a long random `SESSION_SECRET`
+- `ADMIN_EMAILS`
+- `SMTP_HOST` and `SMTP_FROM`, plus credentials when required
+
+Then start the migration, web, and scheduler services:
+
+```bash
 docker compose -f docker-compose.prod.yml up -d --build
 ```
 
-Set `OPENAI_API_KEY` and `OPENAI_MODEL` (optional) in the server environment or a secrets manager before starting when using `LLM_BACKEND=openai_api`. For `LLM_BACKEND=codex_cli`, run `docker compose -f docker-compose.prod.yml run --rm api codex login --device-auth` once so the production `codex-home` volume contains a valid Codex login.
+The web container listens on host port 4000 and exposes `/health`. TLS termination can remain in
+the existing reverse proxy. Production cookies are secure and magic-link debug output is disabled.
 
-## Project Structure
+The deployment intentionally supports one web instance and one scheduler instance. SQLite WAL
+mode permits their normal concurrent reads and writes, but this v1 is not intended for horizontal
+scaling.
 
-```
-config.yaml              # All user-facing configuration
-pyproject.toml           # Project metadata plus pytest/ruff config
-docker-compose.yml       # Dev stack
-docker-compose.prod.yml  # Production stack
-api/
-  main.py                # Orchestrator — wires ArXiv → agent → blog post
-  server.py              # FastAPI app — exposes /trigger when MANUAL_TRIGGERS_ALLOWED=true
-  arxiv_client.py        # ArXiv API queries
-  agent.py               # OpenAI Agents SDK: summariser + combiner agents
-  codex_agent.py         # Codex CLI backend: summariser + combiner via codex exec
-  summary_backend.py     # Selects openai_api or codex_cli backend
-  file_handler.py        # Paper pickle cache (dev mode)
-  webs.py                # Renders the Jekyll markdown post
-  settings.py            # Env var loading, prompt builders, query builder
-  models.py              # Shared typed data structures
-  utils.py               # PDF extraction and text utilities
-  crontab                # Cron schedule for production (supercronic)
-  requirements.txt
-  requirements-dev.txt
-  tests/
-    test_main.py         # Unit tests for core logic
-    test_server.py       # FastAPI route tests
-blog/                    # Jekyll site — posts written here by the API
-```
+## Database maintenance and backups
 
-## Running Tests
+The database is stored at `data/paperpulse.db`. Before upgrades, stop the web and scheduler or use
+SQLite's online backup command to produce a consistent snapshot. Back up the database together
+with `config.yaml`; Codex login state lives separately in the `codex-home` Docker volume.
+
+Apply migrations manually when needed:
 
 ```bash
-python3 -m venv .venv
+docker compose run --rm migrate alembic upgrade head
+```
+
+Do not copy only the main `.db` file while live WAL writes are in progress unless the backup tool
+also handles the WAL state.
+
+## Local Python checks
+
+Python 3.11 or newer is supported:
+
+```bash
+python -m venv .venv
 . .venv/bin/activate
-python -m pip install -U pip
 python -m pip install -r api/requirements-dev.txt
 pytest
+ruff check api migrations
+python -m compileall -q api migrations
 ```
+
+The test suite covers authentication primitives, moderation, subscriptions, query construction,
+daily and weekly idempotency, web personalization, and legacy import.
+
+## Configuration boundary
+
+`config.yaml` remains the source for branding and summarization persona/style. Topic-specific
+categories and keywords move into SQLite and are managed through the application. Runtime secrets,
+mail settings, database location, administrator identities, and backend selection remain environment
+variables.
 
 ## License
 

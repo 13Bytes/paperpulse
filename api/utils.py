@@ -9,6 +9,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+
 def extract_text_from_pdf(pdf_content):
     """
     Extracts text from the PDF content.
@@ -30,6 +31,7 @@ def extract_text_from_pdf(pdf_content):
             if page_text:
                 text += page_text + "\n"
     return text.strip()
+
 
 def extract_images_from_pdf_base64(pdf_content):
     """
@@ -69,6 +71,7 @@ def extract_images_from_pdf_base64(pdf_content):
 
     return images_base64
 
+
 def download_pdf(pdf_url, filename):
     """
     Downloads a PDF from a given URL and saves it to the platform temp directory.
@@ -79,7 +82,7 @@ def download_pdf(pdf_url, filename):
     """
     filepath = Path(tempfile.gettempdir()) / filename
     try:
-        with urllib.request.urlopen(pdf_url) as response, filepath.open('wb') as outfile:
+        with urllib.request.urlopen(pdf_url) as response, filepath.open("wb") as outfile:
             outfile.write(response.read())
         logger.info("Successfully downloaded PDF to %s", filepath)
         return str(filepath)
@@ -91,20 +94,23 @@ def download_pdf(pdf_url, filename):
         logger.exception("Unexpected error during PDF download: %s", e)
         return None
 
+
 def normalize_text(text):
     """
     Normalize text by removing punctuation, extra spaces, and converting to lowercase
     """
     import re
+
     # Convert to lowercase and replace newlines with spaces
-    text = text.lower().replace('\n', ' ')
+    text = text.lower().replace("\n", " ")
     # Remove punctuation except hyphens between words
-    text = re.sub(r'[^\w\s-]', ' ', text)
+    text = re.sub(r"[^\w\s-]", " ", text)
     # Replace multiple spaces with single space
-    text = re.sub(r'\s+', ' ', text)
+    text = re.sub(r"\s+", " ", text)
     # Remove spaces around hyphens
-    text = re.sub(r'\s*-\s*', '-', text)
+    text = re.sub(r"\s*-\s*", "-", text)
     return text.strip()
+
 
 def find_title_in_text(normalized_text, normalized_title):
     """
@@ -116,11 +122,13 @@ def find_title_in_text(normalized_text, normalized_title):
         bool: True if the title is found, False otherwise
     """
     import re
+
     # Create a pattern that allows for flexible whitespace between words
     words = normalized_title.split()
-    pattern = r'\b' + r'\s+'.join(re.escape(word) for word in words) + r'\b'
+    pattern = r"\b" + r"\s+".join(re.escape(word) for word in words) + r"\b"
     match = re.search(pattern, normalized_text)
     return match is not None
+
 
 def get_last_names(authors_list):
     """
@@ -134,29 +142,31 @@ def get_last_names(authors_list):
             last_names.append(parts[-1])
     return last_names
 
+
 def find_author_citations(text):
     """
     Find author citations in text in format "Author et al. (YEAR)"
     or "Author and Author (YEAR)" or "Author (YEAR)"
     """
     import re
+
     # Pattern matches:
     # 1. Single author: "Smith (2023)"
     # 2. Two authors: "Smith and Jones (2023)"
     # 3. Multiple authors: "Smith et al. (2023)"
     patterns = [
-        r'([A-Z][a-z]+)\s+et\s+al\.\s*\((\d{4})\)',  # Smith et al. (2023)
-        r'([A-Z][a-z]+)\s+and\s+([A-Z][a-z]+)\s*\((\d{4})\)',  # Smith and Jones (2023)
-        r'([A-Z][a-z]+)\s*\((\d{4})\)'  # Smith (2023)
+        r"([A-Z][a-z]+)\s+et\s+al\.\s*\((\d{4})\)",  # Smith et al. (2023)
+        r"([A-Z][a-z]+)\s+and\s+([A-Z][a-z]+)\s*\((\d{4})\)",  # Smith and Jones (2023)
+        r"([A-Z][a-z]+)\s*\((\d{4})\)",  # Smith (2023)
     ]
-    
+
     citations = []
     for pattern in patterns:
         matches = re.finditer(pattern, text)
         for match in matches:
-            if 'et al.' in match.group():
+            if "et al." in match.group():
                 citations.append((match.group(1), match.group(2), match.group()))
-            elif 'and' in match.group():
+            elif "and" in match.group():
                 citations.append(
                     (
                         f"{match.group(1)} and {match.group(2)}",
@@ -168,6 +178,7 @@ def find_author_citations(text):
                 citations.append((match.group(1), match.group(2), match.group()))
     return citations
 
+
 def extract_year_from_url(url):
     """
     Extract year from arXiv URL or return None if not found
@@ -177,40 +188,42 @@ def extract_year_from_url(url):
         str: Year in YYYY format, or None if not found
     """
     import re
+
     # ArXiv URLs typically contain year in format YYMM
-    match = re.search(r'/(\d{2})(\d{2})\.\d+', url)
+    match = re.search(r"/(\d{2})(\d{2})\.\d+", url)
     if match:
-        year = '20' + match.group(1)  # Convert YY to 20YY
+        year = "20" + match.group(1)  # Convert YY to 20YY
         return year
     return None
+
 
 def add_markdown_links(text, paper_list):
     """
     Replace occurrences of paper titles and author citations with markdown hyperlinks
-    
+
     Args:
         text (str): The source markdown text
         paper_list (list): List of dicts containing paper info with keys: 'title', 'authors', 'url'
-    
+
     Returns:
         str: Modified text with markdown hyperlinks added
     """
     result = text
-    
+
     # First handle title matches with normalization
     # Create normalized version of the input text
     normalized_result = normalize_text(result)
-    
+
     # Create title pairs with normalized versions
     title_pairs = []
     for paper in paper_list:
-        original_title = paper['title']
+        original_title = paper["title"]
         normalized_title = normalize_text(original_title)
-        title_pairs.append((original_title, normalized_title, paper['url']))
-    
+        title_pairs.append((original_title, normalized_title, paper["url"]))
+
     # Sort by normalized title length
     title_pairs.sort(key=lambda x: len(x[1]), reverse=True)
-    
+
     for original_title, normalized_title, url in title_pairs:
         # Check if normalized title exists in normalized text
         if find_title_in_text(normalized_result, normalized_title):
@@ -219,37 +232,37 @@ def add_markdown_links(text, paper_list):
             # Find and replace the original text that matched
             # We use word boundaries to ensure we match complete words
             import re
-            pattern = re.compile(re.escape(original_title).replace(r'\ ', r'\s+'), re.IGNORECASE)
+
+            pattern = re.compile(re.escape(original_title).replace(r"\ ", r"\s+"), re.IGNORECASE)
             result = pattern.sub(lambda _match, link=markdown_link: link, result)
-    
+
     # Then handle author citations
     citations = find_author_citations(result)
-    
+
     for author, year, full_citation in citations:
         matching_papers = []
-        
+
         # For each paper, check if it matches the author and year
         for paper in paper_list:
-            paper_year = extract_year_from_url(paper['url'])
+            paper_year = extract_year_from_url(paper["url"])
             if not paper_year:
                 continue
-                
-            last_names = get_last_names(paper.get('authors', []))
-            
+
+            last_names = get_last_names(paper.get("authors", []))
+
             # For "Author1 and Author2 (YEAR)" citations
-            if ' and ' in author:
-                author1, author2 = author.split(' and ')
-                if (author1 in last_names and author2 in last_names and 
-                    year == paper_year):
+            if " and " in author:
+                author1, author2 = author.split(" and ")
+                if author1 in last_names and author2 in last_names and year == paper_year:
                     matching_papers.append(paper)
             # For single author or "et al." citations
             elif author in last_names and year == paper_year:
                 matching_papers.append(paper)
-        
+
         # Only add link if there's exactly one matching paper
         if len(matching_papers) == 1:
             paper = matching_papers[0]
             markdown_link = f'<a href="{paper["url"]}" target="_blank">{full_citation}</a>'
             result = result.replace(full_citation, markdown_link)
-    
+
     return result

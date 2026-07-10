@@ -1,61 +1,70 @@
-# Production stack — Jekyll blog + daily cron summariser.
-# SSL and domain routing are handled by the external Nginx Proxy Manager;
-# this stack only needs to expose port 4000 on the LXC host.
-
 services:
-  blog:
-    build:
-      context: .
-      dockerfile: Dockerfile.jekyll
-    # Run as root so Jekyll can write _site and .jekyll-cache into the
-    # bind-mounted host directory.  In Proxmox LXC with user-namespace
-    # remapping, root inside the container maps to an unprivileged subUID on
-    # the host, so this does not grant elevated host access.
-    user: root
-    # Jekyll reads source from the bind-mounted /srv/jekyll but writes the
-    # built site to /tmp/_site (container-local, always writable).  This
-    # sidesteps the LXC user-namespace UID remapping that makes the host
-    # bind-mount unwritable for any UID inside the container.
-    command: ["jekyll", "serve", "--host", "0.0.0.0", "--force_polling", "--disable-disk-cache", "--destination", "/tmp/_site"]
-    ports:
-      - "4000:4000"
-    volumes:
-      - ./blog:/srv/jekyll
-      - ./config.yaml:/srv/jekyll/_data/paperpulse.yml:ro
-    environment:
-      - JEKYLL_ENV=production
-      - MIXPANEL_TOKEN=${MIXPANEL_TOKEN}
-    restart: unless-stopped
-    networks:
-      - web
-
-  api:
+  migrate:
     build:
       context: .
       dockerfile: api/Dockerfile
     volumes:
-      - ./blog/_posts:/app/blog/_posts  # write posts into the Jekyll tree
-      - ./data:/app/data                 # pickle cache
-      - codex-home:/app/.codex           # persisted Codex CLI auth/state
+      - ./data:/app/data
       - ./config.yaml:/app/config.yaml:ro
-    environment:
-      - PROJECT_ENV=prod
-      - PROJECT_DIR=/app
-      - LLM_BACKEND=${LLM_BACKEND:-openai_api}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
-      - CODEX_HOME=/app/.codex
-      - CODEX_MODEL=${CODEX_MODEL:-}
-      - CODEX_TIMEOUT_SECONDS=${CODEX_TIMEOUT_SECONDS:-900}
-    # supercronic runs the crontab on the defined schedule
-    command: supercronic /app/api/crontab
-    restart: unless-stopped
-    networks:
-      - web
+    environment: &paperpulse-env
+      PROJECT_ENV: prod
+      PROJECT_DIR: /app
+      DATABASE_URL: sqlite:///data/paperpulse.db
+      LLM_BACKEND: ${LLM_BACKEND:-codex_cli}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      CODEX_HOME: /app/.codex
+      CODEX_MODEL: ${CODEX_MODEL:-}
+      CODEX_TIMEOUT_SECONDS: ${CODEX_TIMEOUT_SECONDS:-900}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?PUBLIC_BASE_URL is required}
+      SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET is required}
+      SESSION_COOKIE_SECURE: "true"
+      ADMIN_EMAILS: ${ADMIN_EMAILS:?ADMIN_EMAILS is required}
+      SMTP_HOST: ${SMTP_HOST:?SMTP_HOST is required}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:?SMTP_FROM is required}
+      SMTP_STARTTLS: ${SMTP_STARTTLS:-true}
+    command: alembic upgrade head
+    restart: "no"
 
-networks:
   web:
-    driver: bridge
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    ports:
+      - "4000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./config.yaml:/app/config.yaml:ro
+      - codex-home:/app/.codex
+    environment: *paperpulse-env
+    command: uvicorn api.server:app --host 0.0.0.0 --port 8000
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    networks: [web]
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    volumes:
+      - ./data:/app/data
+      - ./config.yaml:/app/config.yaml:ro
+      - codex-home:/app/.codex
+    environment: *paperpulse-env
+    command: supercronic /app/api/crontab
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    networks: [web]
 
 volumes:
   codex-home:
+networks:
+  web:
+    driver: bridge

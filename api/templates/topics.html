@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Topics · Paperpulse{% endblock %}
+{% block content %}
+<div class="section-heading"><div><p class="eyebrow">Catalog</p><h1>Research topics</h1></div>{% if user %}<a class="button" href="/topics/propose">Propose a topic</a>{% endif %}</div>
+<form class="panel" action="/subscriptions" method="post">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <div class="topic-grid">
+  {% for topic in topics %}
+    <label class="topic-choice">
+      <input type="checkbox" name="topic_ids" value="{{ topic.id }}" {% if topic.id in selected %}checked{% endif %}>
+      <span><strong><a href="/topics/{{ topic.slug }}">{{ topic.name }}</a></strong><small>{{ topic.description }}</small></span>
+    </label>
+  {% else %}<p>No topics are active yet.</p>{% endfor %}
+  </div>
+  <button type="submit">Save selection</button>
+</form>
+{% if not user %}<p class="callout">Want to propose a new topic or sync selections between browsers? <a href="/login">Sign in by email</a>.</p>{% endif %}
+{% endblock %}

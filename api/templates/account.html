@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block title %}Account · Paperpulse{% endblock %}
+{% block content %}<p class="eyebrow">Account</p><h1>{{ user.email }}</h1><div class="section-heading"><h2>Your proposals</h2><a class="button" href="/topics/propose">Propose a topic</a></div>
+<section class="report-list">
+{% for topic in topics %}<article class="report-card"><span class="status status-{{ topic.status }}">{{ topic.status }}</span><h3>{{ topic.name }}</h3><p>{{ topic.description }}</p><div class="tag-list">{% for term in topic.terms %}<span>{{ term.kind }}: {{ term.value }} ({{ term.status }})</span>{% endfor %}</div>{% if topic.review_reason %}<p class="muted">Review note: {{ topic.review_reason }}</p>{% endif %}</article>{% endfor %}
+{% for term in terms %}<article class="report-card"><span class="status status-{{ term.status }}">{{ term.status }}</span><h3>{{ term.kind | title }} suggestion for {{ term.topic.name }}</h3><p>{{ term.value }}</p>{% if term.review_reason %}<p class="muted">Review note: {{ term.review_reason }}</p>{% endif %}</article>{% endfor %}
+{% if not topics and not terms %}<p>No proposals yet.</p>{% endif %}</section>{% endblock %}

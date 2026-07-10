@@ -8,6 +8,7 @@ Two Agent objects are used per run:
 The OPENAI_API_KEY environment variable is read automatically by the SDK.
 The model is controlled via the OPENAI_MODEL env var (default: gpt-4o-mini).
 """
+
 import logging
 from typing import Any
 
@@ -21,7 +22,12 @@ except ImportError:  # pragma: no cover - exercised indirectly in environments w
 
 from api.models import Paper
 from api.paper_formatter import batch_papers, format_paper
-from api.settings import build_combine_prompt, build_summary_prompt, load_app_settings
+from api.settings import (
+    build_combine_prompt,
+    build_summary_prompt,
+    build_weekly_prompt,
+    load_app_settings,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +60,12 @@ class PaperpulseAgent:
                 temperature=0.1,
                 top_p=0.9,
             ),
+        )
+        self.weekly = SDKAgent(
+            name="Weekly Research Summariser",
+            instructions=build_weekly_prompt(config),
+            model=model,
+            model_settings=ModelSettings(temperature=0.1, top_p=0.9),
         )
 
     # ------------------------------------------------------------------
@@ -106,3 +118,9 @@ class PaperpulseAgent:
         except Exception as exc:
             logger.error("Combine step failed: %s", exc)
             return combined_text
+
+    def summarize_weekly(self, daily_reports: list[str]) -> str:
+        if not daily_reports:
+            raise ValueError("No daily reports provided")
+        result = Runner.run_sync(self.weekly, "\n\n--- DAILY REPORT ---\n\n".join(daily_reports))
+        return result.final_output

@@ -11,8 +11,8 @@ import yaml
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 # ArXiv sort parameters (rarely need changing)
-ARXIV_SORT_BY = 'lastUpdatedDate'
-ARXIV_SORT_ORDER = 'descending'
+ARXIV_SORT_BY = "lastUpdatedDate"
+ARXIV_SORT_ORDER = "descending"
 
 
 @dataclass(frozen=True)
@@ -22,11 +22,23 @@ class AppSettings:
     project_env: str
     project_dir: Path
     openai_model: str
-    llm_backend: Literal["openai_api", "codex_cli"] = "openai_api"
+    llm_backend: Literal["openai_api", "codex_cli"] = "codex_cli"
     codex_home: Path | None = None
     codex_model: str | None = None
     codex_timeout_seconds: int = 900
     manual_triggers_allowed: bool = False
+    database_url: str = "sqlite:///data/paperpulse.db"
+    public_base_url: str = "http://localhost:8000"
+    session_secret: str = "dev-only-change-me"
+    session_cookie_secure: bool = False
+    admin_emails: tuple[str, ...] = ()
+    smtp_host: str | None = None
+    smtp_port: int = 587
+    smtp_username: str | None = None
+    smtp_password: str | None = None
+    smtp_from: str = "paperpulse@localhost"
+    smtp_starttls: bool = True
+    magic_link_debug: bool = False
 
     @property
     def data_dir(self) -> Path:
@@ -47,12 +59,9 @@ def parse_bool(value: str | None) -> bool:
 
 def load_app_settings() -> AppSettings:
     project_dir = Path(os.getenv("PROJECT_DIR") or repo_root()).expanduser().resolve()
-    llm_backend = os.getenv("LLM_BACKEND", "openai_api").strip().lower()
+    llm_backend = os.getenv("LLM_BACKEND", "codex_cli").strip().lower()
     if llm_backend not in {"openai_api", "codex_cli"}:
-        raise ValueError(
-            "LLM_BACKEND must be one of: openai_api, codex_cli; "
-            f"got {llm_backend!r}."
-        )
+        raise ValueError(f"LLM_BACKEND must be one of: openai_api, codex_cli; got {llm_backend!r}.")
     codex_home = os.getenv("CODEX_HOME")
     codex_timeout = os.getenv("CODEX_TIMEOUT_SECONDS", "900")
     try:
@@ -62,8 +71,20 @@ def load_app_settings() -> AppSettings:
     if codex_timeout_seconds <= 0:
         raise ValueError("CODEX_TIMEOUT_SECONDS must be greater than zero")
 
+    project_env = os.getenv("PROJECT_ENV", "dev").strip().lower()
+    session_secret = os.getenv("SESSION_SECRET") or "dev-only-change-me"
+    if project_env == "prod" and session_secret == "dev-only-change-me":
+        raise ValueError("SESSION_SECRET must be configured in production")
+    try:
+        smtp_port = int(os.getenv("SMTP_PORT", "587"))
+    except ValueError as exc:
+        raise ValueError("SMTP_PORT must be an integer") from exc
+    admin_emails = tuple(
+        email.strip().lower() for email in os.getenv("ADMIN_EMAILS", "").split(",") if email.strip()
+    )
+
     return AppSettings(
-        project_env=os.getenv("PROJECT_ENV", "dev").strip().lower(),
+        project_env=project_env,
         project_dir=project_dir,
         openai_model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
         llm_backend=cast(Literal["openai_api", "codex_cli"], llm_backend),
@@ -71,12 +92,25 @@ def load_app_settings() -> AppSettings:
         codex_model=(os.getenv("CODEX_MODEL") or "").strip() or None,
         codex_timeout_seconds=codex_timeout_seconds,
         manual_triggers_allowed=parse_bool(os.getenv("MANUAL_TRIGGERS_ALLOWED")),
+        database_url=os.getenv("DATABASE_URL", "sqlite:///data/paperpulse.db"),
+        public_base_url=os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/"),
+        session_secret=session_secret,
+        session_cookie_secure=parse_bool(os.getenv("SESSION_COOKIE_SECURE")),
+        admin_emails=admin_emails,
+        smtp_host=(os.getenv("SMTP_HOST") or "").strip() or None,
+        smtp_port=smtp_port,
+        smtp_username=(os.getenv("SMTP_USERNAME") or "").strip() or None,
+        smtp_password=(os.getenv("SMTP_PASSWORD") or "").strip() or None,
+        smtp_from=os.getenv("SMTP_FROM", "paperpulse@localhost").strip(),
+        smtp_starttls=parse_bool(os.getenv("SMTP_STARTTLS", "true")),
+        magic_link_debug=parse_bool(os.getenv("MAGIC_LINK_DEBUG")),
     )
 
 
 # ---------------------------------------------------------------------------
 # Config loader
 # ---------------------------------------------------------------------------
+
 
 def load_config(config_path: str | os.PathLike[str] | None = None) -> dict[str, Any]:
     """
@@ -110,6 +144,7 @@ def load_config(config_path: str | os.PathLike[str] | None = None) -> dict[str, 
 # ---------------------------------------------------------------------------
 # ArXiv query builder
 # ---------------------------------------------------------------------------
+
 
 def build_arxiv_query(config: dict[str, Any]) -> str:
     """
@@ -149,6 +184,7 @@ def build_arxiv_query(config: dict[str, Any]) -> str:
 # ---------------------------------------------------------------------------
 # Prompt builders
 # ---------------------------------------------------------------------------
+
 
 def build_summary_prompt(config: dict[str, Any]) -> str:
     """Return the system prompt used for per-batch summarisation."""
@@ -199,4 +235,22 @@ and removing any redundancy.
 Write about each theme starting directly with "Theme 1:".
 Do not include any introductory text before Theme 1.
 
+"""
+
+
+def build_weekly_prompt(config: dict[str, Any]) -> str:
+    """Return instructions for synthesizing one topic's daily reports."""
+    summarization = config.get("summarization", {})
+    persona = summarization.get("persona", "You are a research scientist.")
+    style = summarization.get("style", "Explain concepts clearly and precisely.")
+    topic_name = config.get("topic", {}).get("name", "this research topic")
+    return f"""{persona}
+{style}
+
+Create a coherent weekly report for the topic "{topic_name}" using only the supplied
+daily reports. Synthesize the most important developments, recurring themes, and notable
+changes across the week. Remove repetition, preserve complete paper titles when mentioned,
+and do not invent papers or facts that are absent from the source reports.
+
+Start directly with a descriptive Markdown heading and return a polished standalone report.
 """

@@ -17,12 +17,12 @@ class TestMixpanelIntegration:
     def test_mixpanel_token_in_config(self):
         """Test that the Mixpanel token is properly configured in _config.yml."""
         assert CONFIG_PATH.exists(), f"Config file not found at {CONFIG_PATH}"
-        
+
         config_content = CONFIG_PATH.read_text(encoding="utf-8")
-        
+
         # Check if mixpanel_token line exists in the raw content
-        assert 'mixpanel_token:' in config_content, "mixpanel_token not found in _config.yml"
-        
+        assert "mixpanel_token:" in config_content, "mixpanel_token not found in _config.yml"
+
         # Verify the token is set to read from environment using Jekyll's !ENV tag
         assert "!ENV MIXPANEL_TOKEN" in config_content, (
             "mixpanel_token in _config.yml is not configured to use environment variable "
@@ -32,47 +32,49 @@ class TestMixpanelIntegration:
     def test_analytics_file_includes_token(self):
         """Test that analytics.html properly initializes Mixpanel with the token."""
         assert ANALYTICS_PATH.exists(), f"Analytics file not found at {ANALYTICS_PATH}"
-        
+
         analytics_content = ANALYTICS_PATH.read_text(encoding="utf-8")
-        
+
         # Check if the analytics file initializes Mixpanel with the token
-        assert 'mixpanel.init("{{ site.mixpanel_token }}")' in analytics_content, \
+        assert 'mixpanel.init("{{ site.mixpanel_token }}")' in analytics_content, (
             "Mixpanel initialization with token not found in analytics.html"
-        
+        )
+
         # Check for page view tracking
-        assert 'mixpanel.track("Page View"' in analytics_content, \
+        assert 'mixpanel.track("Page View"' in analytics_content, (
             "Page view tracking not found in analytics.html"
+        )
 
     def test_conditional_loading_in_production(self):
         """Test that Mixpanel is only loaded in production environment."""
         assert HEAD_PATH.exists(), f"Head file not found at {HEAD_PATH}"
-        
+
         head_content = HEAD_PATH.read_text(encoding="utf-8")
-        
+
         # Check if Mixpanel is conditionally loaded in production
         production_check = re.search(
             r'{%\s*if\s+jekyll\.environment\s*==\s*"production"\s*%}',
             head_content,
         )
         assert production_check is not None, "Production environment check not found in head.html"
-        
+
         # Check if analytics is included inside the conditional
-        analytics_include = re.search(r'{%\s*include\s+analytics\.html\s*%}', head_content)
+        analytics_include = re.search(r"{%\s*include\s+analytics\.html\s*%}", head_content)
         assert analytics_include is not None, "analytics.html inclusion not found in head.html"
-        
+
         # Check if the conditional structure is complete
-        endif_pattern = re.search(r'{%\s*endif\s*%}', head_content)
+        endif_pattern = re.search(r"{%\s*endif\s*%}", head_content)
         assert endif_pattern is not None, "Conditional structure is incomplete in head.html"
 
     def test_mixpanel_script_integrity(self):
         """Test that the Mixpanel tracking script is properly included."""
         assert ANALYTICS_PATH.exists(), f"Analytics file not found at {ANALYTICS_PATH}"
-        
+
         analytics_content = ANALYTICS_PATH.read_text(encoding="utf-8")
-        
+
         # Check for Mixpanel CDN script
         cdn_script = re.search(
-            r'cdn\.mxpnl\.com/libs/mixpanel-2-latest\.min\.js',
+            r"cdn\.mxpnl\.com/libs/mixpanel-2-latest\.min\.js",
             analytics_content,
         )
         assert cdn_script is not None, "Mixpanel CDN script not found in analytics.html"

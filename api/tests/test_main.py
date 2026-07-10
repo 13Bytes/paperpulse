@@ -109,6 +109,7 @@ def test_load_app_settings_codex_backend(monkeypatch, tmp_path):
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
     monkeypatch.setenv("CODEX_MODEL", "gpt-5")
     monkeypatch.setenv("CODEX_TIMEOUT_SECONDS", "123")
+    monkeypatch.setenv("SESSION_SECRET", "test-production-secret")
 
     settings = load_app_settings()
 
@@ -166,9 +167,7 @@ class TestArxivClient:
         """
         client = ArxivClient(urlopen=lambda _url: FakeResponse(feed), sleep=lambda _seconds: None)
 
-        papers = client.retrieve_daily_results(
-            now=datetime(2026, 1, 2, 12, tzinfo=UTC)
-        )
+        papers = client.retrieve_daily_results(now=datetime(2026, 1, 2, 12, tzinfo=UTC))
 
         assert [paper["title"] for paper in papers] == ["Newest", "Still recent"]
 
@@ -200,7 +199,10 @@ class TestArxivClient:
         """
         client = ArxivClient(urlopen=lambda _url: FakeResponse(feed))
 
-        assert client.get_pdf_url("https://arxiv.org/abs/1234.5678") == "https://arxiv.org/pdf/1234.5678"
+        assert (
+            client.get_pdf_url("https://arxiv.org/abs/1234.5678")
+            == "https://arxiv.org/pdf/1234.5678"
+        )
 
     def test_extract_and_filter_titles(self):
         client = ArxivClient()
@@ -401,50 +403,18 @@ def test_create_summary_backend_selects_codex_cli(tmp_path):
     assert isinstance(create_summary_backend({}, settings), CodexCliAgent)
 
 
-def test_main_uses_selected_summary_backend(monkeypatch, tmp_path, sample_paper):
-    class FakeArxivClient:
-        def __init__(self, *_args):
-            pass
-
-        def retrieve_daily_results(self):
-            return [sample_paper]
-
-    class FakeBackend:
-        def identify_important_papers(self, papers):
-            assert papers == [sample_paper]
-            return "Summary with Test Paper Title"
-
-    created_posts = []
-    settings = AppSettings(
-        project_env="prod",
-        project_dir=tmp_path,
-        openai_model="test-model",
-        llm_backend="codex_cli",
-    )
-
+def test_main_runs_multi_topic_daily_job(monkeypatch):
     monkeypatch.setattr(main_module, "load_dotenv", lambda: None)
-    monkeypatch.setattr(main_module, "load_app_settings", lambda: settings)
-    monkeypatch.setattr(main_module, "load_config", lambda: {})
-    monkeypatch.setattr(main_module, "ArxivClient", FakeArxivClient)
     monkeypatch.setattr(
         main_module,
-        "create_summary_backend",
-        lambda config, app_settings: FakeBackend(),
-    )
-    monkeypatch.setattr(
-        main_module,
-        "create_blogpost",
-        lambda summary, num_papers, config, settings: (
-            created_posts.append((summary, num_papers, config, settings))
-            or tmp_path / "post.md"
-        ),
+        "run_daily",
+        lambda: SimpleNamespace(succeeded=2, skipped=1, failed=0),
     )
 
     result = main_module.main()
 
     assert result.ok is True
-    assert created_posts[0][1] == 1
-    assert created_posts[0][3] is settings
+    assert result.message == "Daily topic run complete: 2 published, 1 skipped, 0 failed"
 
 
 class TestFileHandler:
@@ -474,8 +444,7 @@ def test_add_markdown_links_links_titles_and_author_citations():
 
     assert '<a href="http://example.com/2501.00001" target="_blank">Paper One</a>' in result
     assert (
-        '<a href="http://example.com/2501.00001" target="_blank">Smith et al. (2025)</a>'
-        in result
+        '<a href="http://example.com/2501.00001" target="_blank">Smith et al. (2025)</a>' in result
     )
 
 
@@ -513,16 +482,10 @@ def test_create_blogpost_creates_directory_and_safe_front_matter(tmp_path):
     assert "Test summary content" in content
 
 
-def test_jekyll_branding_comes_only_from_central_config():
+def test_compose_uses_web_scheduler_and_sqlite_data_volume():
     project_root = Path(__file__).parents[2]
-    config_text = (project_root / "blog" / "_config.yml").read_text(encoding="utf-8")
-    # BaseLoader tolerates Jekyll's custom !ENV tag; scalar types are irrelevant here.
-    jekyll_config = yaml.load(config_text, Loader=yaml.BaseLoader)
-
-    assert not {"title", "tagline", "description"} & jekyll_config.keys()
-    assert (project_root / "blog" / "_plugins" / "paperpulse_config.rb").is_file()
-
-    expected_mount = "./config.yaml:/srv/jekyll/_data/paperpulse.yml:ro"
     for compose_name in ("docker-compose.yml", "docker-compose.prod.yml"):
         compose = yaml.safe_load((project_root / compose_name).read_text(encoding="utf-8"))
-        assert expected_mount in compose["services"]["blog"]["volumes"]
+        assert {"migrate", "web", "scheduler"} <= compose["services"].keys()
+        assert "blog" not in compose["services"]
+        assert "./data:/app/data" in compose["services"]["web"]["volumes"]

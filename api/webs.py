@@ -32,7 +32,7 @@ def create_blogpost(
     blog_cfg = config.get("blog", {})
     post_title = blog_cfg.get("post_title", "Daily Research Summary")
 
-    todays_date = (date or datetime.now()).strftime('%Y-%m-%d')
+    todays_date = (date or datetime.now()).strftime("%Y-%m-%d")
     filename = f"{todays_date}-daily-summary.markdown"
 
     front_matter = yaml.safe_dump(

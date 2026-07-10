@@ -1,8 +1,10 @@
 # ============================================================
 # Paperpulse — central configuration
 # ============================================================
-# Edit this file to change what gets searched, how summaries
-# are written, and how the blog is branded.
+# The application uses this file for branding and summary style.
+# The search section is retained only to seed the first topic
+# through `python -m api.importer`; live topic searches are stored
+# in SQLite and managed through the web application.
 # Environment-sensitive secrets (API keys, etc.) stay in .env
 # ============================================================
 

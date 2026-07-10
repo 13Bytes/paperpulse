@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ site.title or 'Paperpulse' }}{% endblock %}</title>
+  <meta name="description" content="{{ site.description or 'Research reports tailored to your interests.' }}">
+  <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="/">{{ site.title or 'Paperpulse' }}</a>
+    <nav>
+      <a href="/topics">Topics</a>
+      {% if user %}
+        <a href="/account">Account</a>
+        {% if user.is_admin %}<a href="/admin">Admin</a>{% endif %}
+        <form class="inline" action="/logout" method="post">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button class="link-button">Sign out</button>
+        </form>
+      {% else %}
+        <a href="/login">Sign in</a>
+      {% endif %}
+    </nav>
+  </header>
+  <main>{% block content %}{% endblock %}</main>
+  <footer>Paperpulse · Public ArXiv research summaries</footer>
+</body>
+</html>

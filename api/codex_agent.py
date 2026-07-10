@@ -9,7 +9,12 @@ from typing import Any
 
 from api.models import Paper
 from api.paper_formatter import batch_papers, format_paper
-from api.settings import AppSettings, build_combine_prompt, build_summary_prompt
+from api.settings import (
+    AppSettings,
+    build_combine_prompt,
+    build_summary_prompt,
+    build_weekly_prompt,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -31,8 +36,7 @@ class CodexCliAgent:
         self.codex_home = settings.codex_home
         self.codex_model = settings.codex_model
         self.timeout_seconds = settings.codex_timeout_seconds
-        self.schema_path = Path(__file__).with_name(
-            "codex_summary_schema.json")
+        self.schema_path = Path(__file__).with_name("codex_summary_schema.json")
         self.run_command = run_command
 
     def identify_important_papers(self, papers: list[Paper]) -> str:
@@ -47,17 +51,21 @@ class CodexCliAgent:
         for i, batch in enumerate(batches, 1):
             logger.info("Processing Codex batch %d / %d", i, len(batches))
             batch_text = "\n".join(format_paper(paper) for paper in batch)
-            prompt = self._build_prompt(
-                build_summary_prompt(self.config), batch_text)
+            prompt = self._build_prompt(build_summary_prompt(self.config), batch_text)
             intermediate.append(self._run_codex(prompt))
 
         if len(intermediate) == 1:
             return intermediate[0]
 
         combined_text = "\n\n".join(intermediate)
-        prompt = self._build_prompt(
-            build_combine_prompt(self.config), combined_text)
+        prompt = self._build_prompt(build_combine_prompt(self.config), combined_text)
         return self._run_codex(prompt)
+
+    def summarize_weekly(self, daily_reports: list[str]) -> str:
+        if not daily_reports:
+            raise ValueError("No daily reports provided")
+        content = "\n\n--- DAILY REPORT ---\n\n".join(daily_reports)
+        return self._run_codex(self._build_prompt(build_weekly_prompt(self.config), content))
 
     def _build_prompt(self, instructions: str, content: str) -> str:
         return (
@@ -134,6 +142,5 @@ class CodexCliAgent:
 
         summary = payload.get("summary")
         if not isinstance(summary, str) or not summary.strip():
-            raise RuntimeError(
-                "Codex CLI returned an empty or missing summary")
+            raise RuntimeError("Codex CLI returned an empty or missing summary")
         return summary
