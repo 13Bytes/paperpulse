@@ -4,7 +4,7 @@ on:
   pull_request:
   push:
     branches:
-      - main
+      - "**"
 
 jobs:
   python:
@@ -70,4 +70,4 @@ jobs:
           docker run --rm -e JEKYLL_ENV=production
           -v "$PWD/blog:/srv/jekyll"
           -v "$PWD/config.yaml:/srv/jekyll/_data/paperpulse.yml:ro"
-          paperpulse-jekyll jekyll build --destination /tmp/_site
+          paperpulse-jekyll jekyll build --disable-disk-cache --destination /tmp/_site
