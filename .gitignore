@@ -124,6 +124,7 @@ celerybeat.pid
 
 # Environments
 .env
+.codex/
 .venv
 env/
 venv/
@@ -162,4 +163,5 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 certbot/
+data/
 blog/_posts/*

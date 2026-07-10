@@ -14,9 +14,9 @@ The search scope, summarisation persona, and blog branding are all controlled vi
 ## Requirements
 
 - Docker (both dev and prod run entirely in containers)
-- An OpenAI API key
+- An OpenAI API key, or a persisted Codex CLI login for the experimental Codex backend
 
-For local development outside Docker, Python 3.x and the packages in `api/requirements.txt` are also needed.
+For local development outside Docker, use Python 3.11+ with a virtual environment and the packages in `api/requirements-dev.txt`.
 
 ## Configuration
 
@@ -37,10 +37,47 @@ Secrets and environment-specific values stay in `.env` (never committed):
 OPENAI_API_KEY=sk-...
 PROJECT_ENV=dev          # dev | prod
 PROJECT_DIR=/path/to/paperpulse
+LLM_BACKEND=openai_api    # openai_api | codex_cli
 MIXPANEL_TOKEN=...       # optional analytics
 ```
 
-The `OPENAI_MODEL` environment variable controls which model is used (default: `gpt-4o-mini`).
+The default `openai_api` backend uses `OPENAI_API_KEY` and `OPENAI_MODEL` (default: `gpt-4o-mini`).
+
+### LLM backends
+
+#### OpenAI API backend
+
+This is the default and production-stable path. Set:
+
+```bash
+LLM_BACKEND=openai_api
+OPENAI_API_KEY=sk-...
+OPENAI_MODEL=gpt-4o-mini
+```
+
+#### Codex CLI backend
+
+This experimental backend runs `codex exec` inside the API container and reuses a persisted ChatGPT/Codex login from `CODEX_HOME`. It is intended for a trusted self-hosted server where the whole daily summariser uses the account of whoever performed setup.
+
+Set:
+
+```bash
+LLM_BACKEND=codex_cli
+CODEX_HOME=/app/.codex
+CODEX_MODEL=             # optional; leave empty for Codex default
+CODEX_TIMEOUT_SECONDS=900
+```
+
+Then build the API image and log in once:
+
+```bash
+docker compose build api
+docker compose run --rm api-run codex login --device-auth
+```
+
+The compose files mount `/app/.codex` as a Docker named volume, so the login survives normal container recreation and image rebuilds. `docker compose down -v` removes named volumes and will require logging in again.
+
+Treat `$CODEX_HOME/auth.json` like a password: do not commit it, paste it into tickets, or share it in chat.
 
 ## Development vs Production
 
@@ -82,7 +119,28 @@ docker compose run --rm api-run
 
 In `dev` mode (`PROJECT_ENV=dev`), retrieved papers are cached to a pickle file (`data/papers-<date>.pkl`). Re-running within the same day skips the ArXiv API call and reuses the cache, so only the LLM call is made on subsequent triggers.
 
+The Jekyll containers mount `config.yaml` as site data and load the `blog` branding fields at startup, so the central config remains the single source of truth.
+
 The `.env` file is bind-mounted read-only into the container so `python-dotenv` can load it automatically.
+
+If `LLM_BACKEND=codex_cli`, the dev API server and one-shot runner both use the same persisted `codex-home` Docker volume.
+
+### Local Python development
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -U pip
+python -m pip install -r api/requirements-dev.txt
+```
+
+Useful local checks:
+
+```bash
+pytest
+ruff check api
+python -m compileall -q api
+```
 
 ### Production (`docker-compose.prod.yml`)
 
@@ -105,12 +163,13 @@ SSL termination and domain routing are handled externally by Nginx Proxy Manager
 docker compose -f docker-compose.prod.yml up -d --build
 ```
 
-Set `OPENAI_API_KEY` and `OPENAI_MODEL` (optional) in the server environment or a secrets manager before starting.
+Set `OPENAI_API_KEY` and `OPENAI_MODEL` (optional) in the server environment or a secrets manager before starting when using `LLM_BACKEND=openai_api`. For `LLM_BACKEND=codex_cli`, run `docker compose -f docker-compose.prod.yml run --rm api codex login --device-auth` once so the production `codex-home` volume contains a valid Codex login.
 
 ## Project Structure
 
 ```
 config.yaml              # All user-facing configuration
+pyproject.toml           # Project metadata plus pytest/ruff config
 docker-compose.yml       # Dev stack
 docker-compose.prod.yml  # Production stack
 api/
@@ -118,21 +177,30 @@ api/
   server.py              # FastAPI app — exposes /trigger when MANUAL_TRIGGERS_ALLOWED=true
   arxiv_client.py        # ArXiv API queries
   agent.py               # OpenAI Agents SDK: summariser + combiner agents
+  codex_agent.py         # Codex CLI backend: summariser + combiner via codex exec
+  summary_backend.py     # Selects openai_api or codex_cli backend
   file_handler.py        # Paper pickle cache (dev mode)
   webs.py                # Renders the Jekyll markdown post
   settings.py            # Env var loading, prompt builders, query builder
+  models.py              # Shared typed data structures
   utils.py               # PDF extraction and text utilities
   crontab                # Cron schedule for production (supercronic)
   requirements.txt
+  requirements-dev.txt
   tests/
     test_main.py         # Unit tests for core logic
+    test_server.py       # FastAPI route tests
 blog/                    # Jekyll site — posts written here by the API
 ```
 
 ## Running Tests
 
 ```bash
-pytest api/tests/test_main.py
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -U pip
+python -m pip install -r api/requirements-dev.txt
+pytest
 ```
 
 ## License
