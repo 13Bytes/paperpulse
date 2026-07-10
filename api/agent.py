@@ -9,10 +9,19 @@ The OPENAI_API_KEY environment variable is read automatically by the SDK.
 The model is controlled via the OPENAI_MODEL env var (default: gpt-4o-mini).
 """
 import logging
+from typing import Any
 
-from agents import Agent as SDKAgent, Runner, ModelSettings
+try:
+    from agents import Agent as SDKAgent
+    from agents import ModelSettings, Runner
+except ImportError:  # pragma: no cover - exercised indirectly in environments without deps
+    SDKAgent = None
+    ModelSettings = None
+    Runner = None
 
-from api.settings import OPENAI_MODEL, build_summary_prompt, build_combine_prompt
+from api.models import Paper
+from api.paper_formatter import batch_papers, format_paper
+from api.settings import build_combine_prompt, build_summary_prompt, load_app_settings
 
 logger = logging.getLogger(__name__)
 
@@ -20,11 +29,18 @@ logger = logging.getLogger(__name__)
 class PaperpulseAgent:
     """Orchestrates batch summarisation of ArXiv papers via the OpenAI Agents SDK."""
 
-    def __init__(self, config):
+    def __init__(self, config: dict[str, Any], model: str | None = None):
+        if SDKAgent is None or ModelSettings is None:
+            raise RuntimeError(
+                "openai-agents is not installed. "
+                "Install api/requirements.txt before running the pipeline."
+            )
+
+        model = model or load_app_settings().openai_model
         self.summarizer = SDKAgent(
             name="Engineering Research Summariser",
             instructions=build_summary_prompt(config),
-            model=OPENAI_MODEL,
+            model=model,
             model_settings=ModelSettings(
                 temperature=0.1,
                 top_p=0.9,
@@ -33,7 +49,7 @@ class PaperpulseAgent:
         self.combiner = SDKAgent(
             name="Summary Combiner",
             instructions=build_combine_prompt(config),
-            model=OPENAI_MODEL,
+            model=model,
             model_settings=ModelSettings(
                 temperature=0.1,
                 top_p=0.9,
@@ -44,33 +60,18 @@ class PaperpulseAgent:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _format_paper(self, paper):
-        return (
-            f"**Title:** {paper['title']}\n"
-            f"**Authors:** {', '.join(paper['authors'])}\n"
-            f"**Summary:** {paper['summary']}\n"
-        )
+    def _format_paper(self, paper: Paper) -> str:
+        return format_paper(paper)
 
-    def _batch_papers(self, papers, max_chars):
+    def _batch_papers(self, papers: list[Paper], max_chars: int) -> list[list[Paper]]:
         """Split papers into batches whose combined text stays under max_chars."""
-        batches, current_batch, current_length = [], [], 0
-        for paper in papers:
-            chunk = self._format_paper(paper)
-            if current_length + len(chunk) > max_chars and current_batch:
-                batches.append(current_batch)
-                current_batch, current_length = [], 0
-            current_batch.append(paper)
-            current_length += len(chunk)
-        if current_batch:
-            batches.append(current_batch)
-        logger.info("Split %d papers into %d batches", len(papers), len(batches))
-        return batches
+        return batch_papers(papers, max_chars)
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
-    def identify_important_papers(self, papers):
+    def identify_important_papers(self, papers: list[Paper]) -> str:
         """Summarise all papers in batches, then merge into a single post."""
         if not papers:
             raise ValueError("No papers provided to summarise")

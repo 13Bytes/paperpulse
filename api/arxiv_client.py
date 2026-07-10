@@ -1,27 +1,36 @@
-import time
 import logging
 import re
+import time
 import urllib
 import urllib.request as libreq
-
 import xml.etree.ElementTree as ET
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 
-from datetime import datetime, date, timedelta, timezone
+from api.models import Paper
 
 logger = logging.getLogger(__name__)
 
+
+ATOM_NS = '{http://www.w3.org/2005/Atom}'
+
+
 class ArxivClient:
-    def __init__(self,
-                 search_query='cat:cs.AI',
-                 sort_by='lastUpdatedDate',
-                 sort_order='descending'):
-        
-        # Define the search query and sorting parameters
+    def __init__(
+        self,
+        search_query='cat:cs.AI',
+        sort_by='lastUpdatedDate',
+        sort_order='descending',
+        urlopen: Callable = libreq.urlopen,
+        sleep: Callable[[float], None] = time.sleep,
+    ):
         self.search_query = search_query
         self.sort_by = sort_by
         self.sort_order = sort_order
+        self.urlopen = urlopen
+        self.sleep = sleep
 
-    def _process_paper_entry(self, entry):
+    def _process_paper_entry(self, entry) -> Paper:
         """
         Parses the data retrieved by the ArXiV API call, extracts information, and populates a dict
 
@@ -31,25 +40,27 @@ class ArxivClient:
         Returns:
             dict: containing the parsed values
         """
-        affiliations = []
-        paper = {}
-        paper['title'] = entry.find('{http://www.w3.org/2005/Atom}title').text
-        paper['authors'] = [author.find('{http://www.w3.org/2005/Atom}name').text 
-                    for author in entry.findall('{http://www.w3.org/2005/Atom}author')]
-        for author in entry.findall('{http://www.w3.org/2005/Atom}author'):
-            affiliation_element = author.find('{http://arxiv.org/schemas/atom}affiliation')
-            if affiliation_element is not None:
-                affiliations.append(affiliation_element.text)
-        paper['summary'] = entry.find('{http://www.w3.org/2005/Atom}summary').text
-        paper['url'] = entry.find('{http://www.w3.org/2005/Atom}id').text
+        title = entry.findtext(f'{ATOM_NS}title', default='').strip()
+        summary = entry.findtext(f'{ATOM_NS}summary', default='').strip()
+        url = entry.findtext(f'{ATOM_NS}id', default='').strip()
+        authors = [
+            name.text.strip()
+            for author in entry.findall(f'{ATOM_NS}author')
+            if (name := author.find(f'{ATOM_NS}name')) is not None and name.text
+        ]
+        return Paper(title=title, authors=authors, summary=summary, url=url)
 
-        return paper
-
-    def retrieve_daily_results(self):
+    def retrieve_daily_results(
+        self,
+        max_results: int = 50,
+        max_retries: int = 5,
+        result_limit: int = 1200,
+        now: datetime | None = None,
+    ) -> list[Paper]:
         """
-        Retrieves all result for the last day.
-        Retrieves results 10 at a time, starting from a week ago and continuing
-        till the latest paper is retrieved. 
+        Retrieve papers updated within the previous 24 hours.
+        Results are fetched in descending update order until the first entry at
+        or before the cutoff is encountered.
 
         Args:
             None
@@ -58,95 +69,107 @@ class ArxivClient:
             list: list of dicts (title, authors, summary, url) of parsed information about papers.
         """
         papers = []
-        # Define the desired timezone - using UTC for consistency
-        desired_timezone = timezone.utc 
-
-        # Calculate the date one week ago in the desired timezone
-        #currdate = datetime.now(desired_timezone)
-        #print(f'Current datetime: {currdate}')
-        #one_day_ago = currdate - timedelta(days=1)
-        #print(f'Retrieving results for {one_day_ago}')
-        one_day_ago = None
+        desired_timezone = UTC
+        now = now or datetime.now(desired_timezone)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=desired_timezone)
+        one_day_ago = now.astimezone(desired_timezone) - timedelta(days=1)
+        logger.info("Retrieving papers updated after %s", one_day_ago)
 
         start = 0
-        max_results = 50  
-        max_retries = 5 # sometimes the API fails, so retry 3 times and only then give up.
 
         while True:
-            url = f'http://export.arxiv.org/api/query?search_query={self.search_query}&sortBy={self.sort_by}&sortOrder={self.sort_order}&start={start}&max_results={max_results}'
-            
+            url = (
+                "http://export.arxiv.org/api/query?"
+                f"search_query={self.search_query}"
+                f"&sortBy={self.sort_by}"
+                f"&sortOrder={self.sort_order}"
+                f"&start={start}"
+                f"&max_results={max_results}"
+            )
+
             retry_count = 0
             while retry_count < max_retries:
                 try:
-                    with libreq.urlopen(url) as response:
+                    with self.urlopen(url) as response:
                         data = response.read()
                         root = ET.fromstring(data)
 
-                        # Check if any entries were returned
-                        if len(root.findall('{http://www.w3.org/2005/Atom}entry')) == 0:
+                        if len(root.findall(f'{ATOM_NS}entry')) == 0:
                             retry_count += 1
                             if retry_count == max_retries:
-                                print(f"No data in returned XML after {max_retries} attempts")
+                                logger.warning(
+                                    "No data in returned XML after %d attempts",
+                                    max_retries,
+                                )
                                 xml_str = ET.tostring(root, encoding='unicode', method='xml')
-                                print(f'Full xml = {xml_str}')
+                                logger.debug("Full XML response: %s", xml_str)
                                 return papers
-                            print(f"No data in returned XML, attempt {retry_count} of {max_retries}")
-                            time.sleep(10)  # Wait 10 seconds before retrying
+                            logger.info(
+                                "No data in returned XML, attempt %d of %d",
+                                retry_count,
+                                max_retries,
+                            )
+                            self.sleep(10)
                             continue
-                        
-                        # If we get here, we have data, so break the retry loop
+
                         break
                 except urllib.error.HTTPError as e:
                     retry_count += 1
                     if retry_count == max_retries:
-                        print(f"Failed to retrieve data after {max_retries} attempts: {str(e)}")
+                        logger.error(
+                            "Failed to retrieve data after %d attempts: %s",
+                            max_retries,
+                            e,
+                        )
                         return papers
-                    print(f"Error on attempt {retry_count}: {str(e)}")
+                    logger.warning("HTTP error on attempt %d: %s", retry_count, e)
                     if e.code == 429:
-                        # Exponential backoff for rate limiting: 60s, 120s, 240s, 480s
                         wait_time = 60 * (2 ** (retry_count - 1))
-                        print(f"Rate limited (429). Waiting {wait_time}s before retry {retry_count + 1}...")
-                        time.sleep(wait_time)
+                        logger.info(
+                            "Rate limited (429). Waiting %ds before retry %d",
+                            wait_time,
+                            retry_count + 1,
+                        )
+                        self.sleep(wait_time)
                     else:
-                        time.sleep(5)
+                        self.sleep(5)
                     continue
-                except Exception as e:
+                except (urllib.error.URLError, ET.ParseError) as e:
                     retry_count += 1
                     if retry_count == max_retries:
-                        print(f"Failed to retrieve data after {max_retries} attempts: {str(e)}")
+                        logger.error(
+                            "Failed to retrieve data after %d attempts: %s",
+                            max_retries,
+                            e,
+                        )
                         return papers
-                    print(f"Error on attempt {retry_count}: {str(e)}")
-                    time.sleep(5)
+                    logger.warning("ArXiv request failed on attempt %d: %s", retry_count, e)
+                    self.sleep(5)
                     continue
 
-            for entry in root.findall('{http://www.w3.org/2005/Atom}entry'):
-                updated_date_str = entry.find('{http://www.w3.org/2005/Atom}updated').text
-                #print(updated_date_str)
+            for entry in root.findall(f'{ATOM_NS}entry'):
+                updated_date_str = entry.find(f'{ATOM_NS}updated').text
                 updated_date = datetime.strptime(updated_date_str, '%Y-%m-%dT%H:%M:%S%z')
+                updated_date = updated_date.astimezone(desired_timezone)
 
-                # Make sure updated_date is in the desired timezone
-                updated_date = updated_date.astimezone(desired_timezone) 
-
-                if not one_day_ago:
-                    one_day_ago = updated_date - timedelta(days=1)
-                    print(f'Retrieving new/updated papers till : {one_day_ago}')
-                
                 if updated_date > one_day_ago:
                     papers.append(self._process_paper_entry(entry))
                 else:
-                    # Stop processing since entries are sorted by last updated date
-                    print(f'Current: {updated_date}. Up to: {one_day_ago}')
-                    papers.append(self._process_paper_entry(entry))
+                    logger.info(
+                        "Reached cutoff at %s; latest cutoff is %s",
+                        updated_date,
+                        one_day_ago,
+                    )
                     return papers
 
-            # Increment start index for the next batch
             start += max_results
-            print(f'latest date: {updated_date}')
-            time.sleep(5)
-            if start>1200: # never retrieve more than 1600 results
-                print('Found more than 1200 papers')
+            logger.info("Latest paper date on page: %s", updated_date)
+            self.sleep(5)
+            if start > result_limit:
+                logger.warning("Found more than %d papers; stopping retrieval", result_limit)
                 break
-        
+
         return papers
     
     def extract_titles(self, content):
@@ -213,7 +236,7 @@ class ArxivClient:
 
         try:
             # 3. Call the API and get the Atom feed
-            with libreq.urlopen(api_url) as response:
+            with self.urlopen(api_url) as response:
                 xml_content = response.read()
 
             # 4. Parse the Atom feed

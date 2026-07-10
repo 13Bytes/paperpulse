@@ -1,8 +1,7 @@
-import pytest
-import os
 import re
-import yaml
 from pathlib import Path
+
+import pytest
 
 # Define the paths to the Jekyll files relative to the project root
 PROJECT_ROOT = Path(__file__).parent.parent.parent
@@ -19,24 +18,22 @@ class TestMixpanelIntegration:
         """Test that the Mixpanel token is properly configured in _config.yml."""
         assert CONFIG_PATH.exists(), f"Config file not found at {CONFIG_PATH}"
         
-        # Read the config file
-        with open(CONFIG_PATH, 'r') as f:
-            config_content = f.read()
+        config_content = CONFIG_PATH.read_text(encoding="utf-8")
         
         # Check if mixpanel_token line exists in the raw content
         assert 'mixpanel_token:' in config_content, "mixpanel_token not found in _config.yml"
         
         # Verify the token is set to read from environment using Jekyll's !ENV tag
-        assert "!ENV MIXPANEL_TOKEN" in config_content, \
-            "mixpanel_token in _config.yml is not configured to use environment variable with !ENV tag"
+        assert "!ENV MIXPANEL_TOKEN" in config_content, (
+            "mixpanel_token in _config.yml is not configured to use environment variable "
+            "with !ENV tag"
+        )
 
     def test_analytics_file_includes_token(self):
         """Test that analytics.html properly initializes Mixpanel with the token."""
         assert ANALYTICS_PATH.exists(), f"Analytics file not found at {ANALYTICS_PATH}"
         
-        # Read the analytics file
-        with open(ANALYTICS_PATH, 'r') as f:
-            analytics_content = f.read()
+        analytics_content = ANALYTICS_PATH.read_text(encoding="utf-8")
         
         # Check if the analytics file initializes Mixpanel with the token
         assert 'mixpanel.init("{{ site.mixpanel_token }}")' in analytics_content, \
@@ -50,12 +47,13 @@ class TestMixpanelIntegration:
         """Test that Mixpanel is only loaded in production environment."""
         assert HEAD_PATH.exists(), f"Head file not found at {HEAD_PATH}"
         
-        # Read the head file
-        with open(HEAD_PATH, 'r') as f:
-            head_content = f.read()
+        head_content = HEAD_PATH.read_text(encoding="utf-8")
         
         # Check if Mixpanel is conditionally loaded in production
-        production_check = re.search(r'{%\s*if\s+jekyll\.environment\s*==\s*"production"\s*%}', head_content)
+        production_check = re.search(
+            r'{%\s*if\s+jekyll\.environment\s*==\s*"production"\s*%}',
+            head_content,
+        )
         assert production_check is not None, "Production environment check not found in head.html"
         
         # Check if analytics is included inside the conditional
@@ -70,12 +68,13 @@ class TestMixpanelIntegration:
         """Test that the Mixpanel tracking script is properly included."""
         assert ANALYTICS_PATH.exists(), f"Analytics file not found at {ANALYTICS_PATH}"
         
-        # Read the analytics file
-        with open(ANALYTICS_PATH, 'r') as f:
-            analytics_content = f.read()
+        analytics_content = ANALYTICS_PATH.read_text(encoding="utf-8")
         
         # Check for Mixpanel CDN script
-        cdn_script = re.search(r'cdn\.mxpnl\.com/libs/mixpanel-2-latest\.min\.js', analytics_content)
+        cdn_script = re.search(
+            r'cdn\.mxpnl\.com/libs/mixpanel-2-latest\.min\.js',
+            analytics_content,
+        )
         assert cdn_script is not None, "Mixpanel CDN script not found in analytics.html"
 
 

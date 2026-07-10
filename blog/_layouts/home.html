@@ -33,73 +33,11 @@ layout: default
   {%- if jekyll.environment == "development" -%}
   <div class="dev-trigger">
     <p class="dev-label">Dev tools</p>
-    <button id="trigger-btn" class="trigger-btn" onclick="triggerUpdate()">
+    <button id="trigger-btn" class="trigger-btn" type="button" aria-busy="false">
       ▶ Run Update Now
     </button>
-    <span id="trigger-status" class="trigger-status"></span>
+    <span id="trigger-status" class="trigger-status" role="status" aria-live="polite"></span>
   </div>
-
-  <script>
-    const API_BASE = "http://localhost:8000";
-
-    async function triggerUpdate() {
-      const btn = document.getElementById("trigger-btn");
-      const status = document.getElementById("trigger-status");
-
-      btn.disabled = true;
-      status.className = "trigger-status";
-      status.textContent = "Starting pipeline…";
-
-      try {
-        const res = await fetch(API_BASE + "/trigger", { method: "POST" });
-        const data = await res.json();
-
-        if (!res.ok) {
-          throw new Error(data.detail || "HTTP " + res.status);
-        }
-
-        if (data.status === "already_running") {
-          status.className = "trigger-status status-warn";
-          status.textContent = "⚠ Already running";
-          btn.disabled = false;
-          return;
-        }
-
-        status.className = "trigger-status status-ok";
-        status.textContent = "✓ Pipeline started – polling for completion…";
-        pollStatus(btn, status);
-      } catch (err) {
-        status.className = "trigger-status status-err";
-        status.textContent = "✗ " + err.message;
-        btn.disabled = false;
-      }
-    }
-
-    async function pollStatus(btn, status) {
-      const interval = setInterval(async () => {
-        try {
-          const res = await fetch(API_BASE + "/trigger/status");
-          const data = await res.json();
-
-          if (!data.running) {
-            clearInterval(interval);
-            btn.disabled = false;
-            if (data.last_result === "success") {
-              status.className = "trigger-status status-ok";
-              status.textContent = "✓ Done – reload the page to see the new post";
-            } else {
-              status.className = "trigger-status status-err";
-              status.textContent = "✗ " + (data.last_result || "unknown error");
-            }
-          }
-        } catch (_) {
-          clearInterval(interval);
-          btn.disabled = false;
-          status.className = "trigger-status status-err";
-          status.textContent = "✗ Lost connection to API";
-        }
-      }, 3000);
-    }
-  </script>
+  <script src="{{ '/assets/js/dev-trigger.js' | relative_url }}" defer></script>
   {%- endif -%}
 </div>
