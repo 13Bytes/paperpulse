@@ -33,12 +33,19 @@ jobs:
       - name: Lint
         run: |
           . .venv/bin/activate
-          ruff check api
+          ruff check api migrations
 
       - name: Compile
         run: |
           . .venv/bin/activate
-          python -m compileall -q api
+          python -m compileall -q api migrations
+
+      - name: Verify database migrations
+        env:
+          DATABASE_URL: sqlite:///${{ runner.temp }}/paperpulse-ci.db
+        run: |
+          . .venv/bin/activate
+          alembic upgrade head
 
   docker:
     name: Docker
@@ -48,12 +55,18 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Validate compose files
+        env:
+          PUBLIC_BASE_URL: https://paperpulse.example.invalid
+          SESSION_SECRET: ci-only-placeholder-secret
+          ADMIN_EMAILS: admin@example.invalid
+          SMTP_HOST: smtp.example.invalid
+          SMTP_FROM: paperpulse@example.invalid
         run: |
           docker compose config
           docker compose -f docker-compose.prod.yml config
 
-      - name: Build API image
-        run: docker compose build api
+      - name: Build web image
+        run: docker compose build web
 
   jekyll:
     name: Jekyll

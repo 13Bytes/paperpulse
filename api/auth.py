@@ -4,16 +4,13 @@ import hashlib
 import re
 import secrets
 import smtplib
-from collections import defaultdict, deque
 from datetime import timedelta
 from email.message import EmailMessage
-from threading import Lock
-from time import monotonic
 
-from sqlalchemy import select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
-from api.db_models import AuthSession, MagicLink, User, utcnow
+from api.db_models import AuthSession, MagicLink, Topic, TopicTerm, User, utcnow
 from api.settings import AppSettings
 
 EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
@@ -30,24 +27,36 @@ def normalize_email(email: str) -> str:
     return email
 
 
-class RateLimiter:
-    def __init__(self) -> None:
-        self._events: dict[str, deque[float]] = defaultdict(deque)
-        self._lock = Lock()
+def allow_login_request(db: Session, email: str, ip: str | None) -> bool:
+    """Apply durable per-address and per-IP limits using issued magic-link records."""
+    email = normalize_email(email)
+    cutoff = utcnow() - timedelta(minutes=15)
+    conditions = [MagicLink.email == email]
+    if ip:
+        conditions.append(MagicLink.requested_ip == ip)
+    count = db.scalar(
+        select(func.count(MagicLink.id)).where(
+            MagicLink.created_at >= cutoff,
+            or_(*conditions),
+        )
+    )
+    return int(count or 0) < 5
 
-    def allow(self, key: str, limit: int, window_seconds: int) -> bool:
-        now = monotonic()
-        with self._lock:
-            events = self._events[key]
-            while events and events[0] <= now - window_seconds:
-                events.popleft()
-            if len(events) >= limit:
-                return False
-            events.append(now)
-            return True
 
-
-rate_limiter = RateLimiter()
+def allow_proposal(db: Session, user_id: int) -> bool:
+    """Limit persisted topic and term proposals per user over a rolling day."""
+    cutoff = utcnow() - timedelta(days=1)
+    topics = db.scalar(
+        select(func.count(Topic.id)).where(
+            Topic.created_by_id == user_id, Topic.created_at >= cutoff
+        )
+    )
+    terms = db.scalar(
+        select(func.count(TopicTerm.id)).where(
+            TopicTerm.created_by_id == user_id, TopicTerm.created_at >= cutoff
+        )
+    )
+    return int(topics or 0) + int(terms or 0) < 10
 
 
 def issue_magic_link(db: Session, email: str, ip: str | None) -> tuple[MagicLink, str]:
@@ -96,6 +105,14 @@ def get_auth_session(db: Session, raw_token: str | None) -> AuthSession | None:
     if not session or session.expires_at <= utcnow():
         return None
     return session
+
+
+def cleanup_expired_auth(db: Session) -> tuple[int, int]:
+    """Delete expired one-time links and sessions, returning deleted row counts."""
+    now = utcnow()
+    links = db.execute(delete(MagicLink).where(MagicLink.expires_at <= now)).rowcount or 0
+    sessions = db.execute(delete(AuthSession).where(AuthSession.expires_at <= now)).rowcount or 0
+    return links, sessions
 
 
 def send_magic_link(settings: AppSettings, recipient: str, token: str) -> None:

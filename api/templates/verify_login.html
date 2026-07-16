@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Confirm sign in · Paperpulse{% endblock %}
+{% block content %}
+<section class="narrow panel">
+  <p class="eyebrow">Passwordless account</p>
+  <h1>Confirm sign in</h1>
+  <p>Continue to use this browser with your Paperpulse account.</p>
+  <form action="/auth/verify" method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="token" value="{{ token }}">
+    <button>Continue to Paperpulse</button>
+  </form>
+</section>
+{% endblock %}

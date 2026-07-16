@@ -3,6 +3,9 @@
 from collections.abc import Iterator
 from pathlib import Path
 
+from alembic.config import Config
+from alembic.migration import MigrationContext
+from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
@@ -57,3 +60,24 @@ def create_schema(target_engine: Engine | None = None) -> None:
     from api import db_models  # noqa: F401, PLC0415
 
     Base.metadata.create_all(target_engine or engine)
+
+
+def schema_revisions(target_engine: Engine | None = None) -> tuple[str | None, str]:
+    """Return the database revision and the migration head expected by this checkout."""
+    target = target_engine or engine
+    config_path = load_app_settings().project_dir / "alembic.ini"
+    config = Config(str(config_path))
+    script = ScriptDirectory.from_config(config)
+    with target.connect() as connection:
+        current = MigrationContext.configure(connection).get_current_revision()
+    return current, script.get_current_head()
+
+
+def assert_schema_current(target_engine: Engine | None = None) -> None:
+    current, expected = schema_revisions(target_engine)
+    if current != expected:
+        raise RuntimeError(
+            "Database schema is not current "
+            f"(database={current or 'unversioned'}, expected={expected}). "
+            "Run `alembic upgrade head` before starting Paperpulse."
+        )

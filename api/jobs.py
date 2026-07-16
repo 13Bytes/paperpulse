@@ -4,16 +4,23 @@ import argparse
 
 from dotenv import load_dotenv
 
-from api.database import create_schema
+from api.auth import cleanup_expired_auth
+from api.database import SessionLocal, assert_schema_current
 from api.pipeline import run_daily, run_weekly
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("job", choices=["daily", "weekly"])
+    parser.add_argument("job", choices=["daily", "weekly", "cleanup"])
     args = parser.parse_args()
     load_dotenv()
-    create_schema()
+    assert_schema_current()
+    if args.job == "cleanup":
+        with SessionLocal() as db:
+            links, sessions = cleanup_expired_auth(db)
+            db.commit()
+        print(f"cleanup: {links} magic links, {sessions} sessions deleted")
+        return 0
     result = run_daily() if args.job == "daily" else run_weekly()
     print(
         f"{args.job}: {result.succeeded} succeeded, "

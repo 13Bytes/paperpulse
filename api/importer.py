@@ -8,7 +8,7 @@ import yaml
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from api.database import SessionLocal, create_schema
+from api.database import SessionLocal, assert_schema_current
 from api.db_models import LegacyRedirect, Report, Topic
 from api.settings import load_app_settings, load_config
 from api.topic_service import create_topic, normalize
@@ -91,7 +91,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--topic-name")
     args = parser.parse_args()
-    create_schema()
+    assert_schema_current()
     created, imported = import_existing(args.topic_name)
     print(f"Created {created} topic; imported {imported} reports")
 

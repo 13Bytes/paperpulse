@@ -2,10 +2,12 @@
 
 import copy
 import logging
+import uuid
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from api.arxiv_client import ArxivClient
@@ -23,6 +25,7 @@ from api.topic_service import active_term_values
 from api.utils import add_markdown_links
 
 logger = logging.getLogger(__name__)
+JOB_STALE_AFTER = timedelta(hours=2)
 
 
 @dataclass(frozen=True)
@@ -30,6 +33,16 @@ class BatchResult:
     succeeded: int = 0
     skipped: int = 0
     failed: int = 0
+
+
+@dataclass(frozen=True)
+class JobClaim:
+    id: int
+    token: str
+
+
+class LostJobClaim(RuntimeError):
+    """Raised when a stale worker tries to finish a job claimed by another worker."""
 
 
 def topic_config(topic: Topic, base_config: dict) -> dict:
@@ -43,33 +56,105 @@ def topic_config(topic: Topic, base_config: dict) -> dict:
     return config
 
 
-def _job(db: Session, topic_id: int, kind: str, start: date, end: date) -> JobRun:
-    job = db.scalar(
-        select(JobRun).where(
+def _claim_job(
+    db: Session, topic_id: int, kind: str, start: date, end: date
+) -> JobClaim | None:
+    """Atomically claim a new, failed, or stale job and publish the claim immediately."""
+    now = utcnow()
+    token = str(uuid.uuid4())
+    job = JobRun(
+        topic_id=topic_id,
+        kind=kind,
+        period_start=start,
+        period_end=end,
+        status="running",
+        attempt_count=1,
+        claim_token=token,
+        started_at=now,
+        last_attempt_at=now,
+    )
+    db.add(job)
+    try:
+        db.commit()
+        logger.info(
+            "Claimed %s job %s for topic %s (%s to %s), attempt 1",
+            kind,
+            job.id,
+            topic_id,
+            start,
+            end,
+        )
+        return JobClaim(job.id, token)
+    except IntegrityError:
+        db.rollback()
+
+    stale_before = now - JOB_STALE_AFTER
+    result = db.execute(
+        update(JobRun)
+        .where(
+            JobRun.topic_id == topic_id,
+            JobRun.kind == kind,
+            JobRun.period_start == start,
+            JobRun.period_end == end,
+            or_(
+                JobRun.status == "failed",
+                and_(JobRun.status == "running", JobRun.started_at <= stale_before),
+            ),
+        )
+        .values(
+            status="running",
+            message=None,
+            attempt_count=JobRun.attempt_count + 1,
+            claim_token=token,
+            started_at=now,
+            last_attempt_at=now,
+            finished_at=None,
+        )
+    )
+    if result.rowcount != 1:
+        db.rollback()
+        logger.info(
+            "Skipped already claimed or completed %s job for topic %s (%s to %s)",
+            kind,
+            topic_id,
+            start,
+            end,
+        )
+        return None
+    claimed_job = db.execute(
+        select(JobRun.id, JobRun.attempt_count).where(
             JobRun.topic_id == topic_id,
             JobRun.kind == kind,
             JobRun.period_start == start,
             JobRun.period_end == end,
         )
+    ).one()
+    db.commit()
+    logger.info(
+        "Reclaimed %s job %s for topic %s (%s to %s), attempt %s",
+        kind,
+        claimed_job.id,
+        topic_id,
+        start,
+        end,
+        claimed_job.attempt_count,
     )
-    if not job:
-        job = JobRun(
-            topic_id=topic_id, kind=kind, period_start=start, period_end=end, status="running"
+    return JobClaim(claimed_job.id, token)
+
+
+def _finish(db: Session, claim: JobClaim, status: str, message: str) -> None:
+    result = db.execute(
+        update(JobRun)
+        .where(
+            JobRun.id == claim.id,
+            JobRun.claim_token == claim.token,
+            JobRun.status == "running",
         )
-        db.add(job)
-    else:
-        job.status = "running"
-        job.message = None
-        job.started_at = utcnow()
-        job.finished_at = None
-    db.flush()
-    return job
-
-
-def _finish(job: JobRun, status: str, message: str) -> None:
-    job.status = status
-    job.message = message
-    job.finished_at = utcnow()
+        .values(status=status, message=message, finished_at=utcnow(), claim_token=None)
+    )
+    if result.rowcount != 1:
+        raise LostJobClaim(f"Job {claim.id} is no longer owned by this worker")
+    logger.info("Finished job %s with status %s: %s", claim.id, status, message)
 
 
 def run_daily(*, now: datetime | None = None, session_factory=SessionLocal) -> BatchResult:
@@ -100,15 +185,17 @@ def run_daily(*, now: datetime | None = None, session_factory=SessionLocal) -> B
             if existing:
                 counts["skipped"] += 1
                 continue
-            job = _job(db, topic_id, "daily", report_day, report_day)
+            claim = _claim_job(db, topic_id, "daily", report_day, report_day)
+            if claim is None:
+                counts["skipped"] += 1
+                continue
             try:
                 config = topic_config(topic, base_config)
                 query = build_arxiv_query(config)
-                papers = ArxivClient(query, ARXIV_SORT_BY, ARXIV_SORT_ORDER).retrieve_daily_results(
-                    now=now
-                )
+                client = ArxivClient(query, ARXIV_SORT_BY, ARXIV_SORT_ORDER)
+                papers = client.retrieve_daily_results(now=now)
                 if not papers:
-                    _finish(job, "skipped", "No matching papers")
+                    _finish(db, claim, "skipped", "No matching papers")
                     db.commit()
                     counts["skipped"] += 1
                     continue
@@ -128,15 +215,21 @@ def run_daily(*, now: datetime | None = None, session_factory=SessionLocal) -> B
                         num_papers=len(papers),
                     )
                 )
-                _finish(job, "success", f"Published report from {len(papers)} papers")
+                _finish(db, claim, "success", f"Published report from {len(papers)} papers")
                 db.commit()
                 counts["succeeded"] += 1
+            except LostJobClaim:
+                logger.warning("Daily job claim was lost for topic %s", topic_id)
+                db.rollback()
+                counts["skipped"] += 1
             except Exception as exc:  # noqa: BLE001
                 logger.exception("Daily report failed for topic %s", topic_id)
                 db.rollback()
-                job = _job(db, topic_id, "daily", report_day, report_day)
-                _finish(job, "failed", f"{type(exc).__name__}: {exc}")
-                db.commit()
+                try:
+                    _finish(db, claim, "failed", f"{type(exc).__name__}: {exc}")
+                    db.commit()
+                except LostJobClaim:
+                    db.rollback()
                 counts["failed"] += 1
     return BatchResult(**counts)
 
@@ -168,7 +261,10 @@ def run_weekly(*, as_of: date | None = None, session_factory=SessionLocal) -> Ba
             if existing:
                 counts["skipped"] += 1
                 continue
-            job = _job(db, topic_id, "weekly", period_start, period_end)
+            claim = _claim_job(db, topic_id, "weekly", period_start, period_end)
+            if claim is None:
+                counts["skipped"] += 1
+                continue
             try:
                 daily_reports = list(
                     db.scalars(
@@ -183,7 +279,7 @@ def run_weekly(*, as_of: date | None = None, session_factory=SessionLocal) -> Ba
                     )
                 )
                 if not daily_reports:
-                    _finish(job, "skipped", "No daily reports in the weekly period")
+                    _finish(db, claim, "skipped", "No daily reports in the weekly period")
                     db.commit()
                     counts["skipped"] += 1
                     continue
@@ -204,14 +300,22 @@ def run_weekly(*, as_of: date | None = None, session_factory=SessionLocal) -> Ba
                 )
                 weekly.source_reports.extend(daily_reports)
                 db.add(weekly)
-                _finish(job, "success", f"Published from {len(daily_reports)} daily reports")
+                _finish(
+                    db, claim, "success", f"Published from {len(daily_reports)} daily reports"
+                )
                 db.commit()
                 counts["succeeded"] += 1
+            except LostJobClaim:
+                logger.warning("Weekly job claim was lost for topic %s", topic_id)
+                db.rollback()
+                counts["skipped"] += 1
             except Exception as exc:  # noqa: BLE001
                 logger.exception("Weekly report failed for topic %s", topic_id)
                 db.rollback()
-                job = _job(db, topic_id, "weekly", period_start, period_end)
-                _finish(job, "failed", f"{type(exc).__name__}: {exc}")
-                db.commit()
+                try:
+                    _finish(db, claim, "failed", f"{type(exc).__name__}: {exc}")
+                    db.commit()
+                except LostJobClaim:
+                    db.rollback()
                 counts["failed"] += 1
     return BatchResult(**counts)

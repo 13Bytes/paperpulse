@@ -18,5 +18,6 @@
 </details>
 {% endif %}
 <div class="section-heading"><h2>Report archive</h2></div>
-<section class="report-list">{% for report in topic.reports %}<article class="report-card"><span class="pill">{{ report.kind }}</span><h3><a href="/reports/{{ report.id }}">{{ report.title }}</a></h3><p>{{ report.period_start }} – {{ report.period_end }}</p></article>{% else %}<p>No reports yet.</p>{% endfor %}</section>
+<section class="report-list">{% for report in reports %}<article class="report-card"><span class="pill">{{ report.kind }}</span><h3><a href="/reports/{{ report.id }}">{{ report.title }}</a></h3><p>{{ report.period_start }} – {{ report.period_end }}</p></article>{% else %}<p>No reports yet.</p>{% endfor %}</section>
+{% if page > 1 or has_next %}<nav class="pagination">{% if page > 1 %}<a href="?page={{ page - 1 }}">Newer reports</a>{% endif %}{% if has_next %}<a href="?page={{ page + 1 }}">Older reports</a>{% endif %}</nav>{% endif %}
 {% endblock %}

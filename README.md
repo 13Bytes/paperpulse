@@ -13,11 +13,13 @@ but report generation now runs independently for every active topic.
 
 - Anonymous topic selection stored in a signed browser cookie
 - Magic-link accounts for cross-browser synchronization
+- Explicit magic-link confirmation so mail scanners cannot consume sign-in links
 - Public topic catalog, topic archives, daily reports, and weekly reports
 - Moderated topic, ArXiv category, and keyword proposals
 - Administrator dashboard with curated topic creation and archiving
 - SQLite persistence with Alembic migrations, foreign keys, and WAL mode
 - Daily jobs at 06:00 UTC and Monday weekly jobs at 07:00 UTC
+- Atomic job claims, stale-job recovery, and an administrator job history
 - One-time import of the existing `config.yaml` topic and Jekyll posts
 
 ## Local development
@@ -79,7 +81,8 @@ category, and at least one keyword. Later category and keyword suggestions follo
 process.
 
 Email addresses listed in the comma-separated `ADMIN_EMAILS` variable receive administrator
-rights after completing magic-link verification. Administrators can:
+rights. The allowlist is checked on every request, so removing an address revokes administrator
+access immediately. Administrators can:
 
 - approve or reject proposed topics and their initial terms as one bundle;
 - approve or reject later category and keyword suggestions individually;
@@ -103,8 +106,10 @@ Then start the migration, web, and scheduler services:
 docker compose -f docker-compose.prod.yml up -d --build
 ```
 
-The web container listens on host port 4000 and exposes `/health`. TLS termination can remain in
-the existing reverse proxy. Production cookies are secure and magic-link debug output is disabled.
+The web container binds to `127.0.0.1:4000` and exposes `/health` for liveness and `/ready` for
+database and migration readiness. TLS termination can remain in the host reverse proxy. Production
+cookies are secure, forwarded client addresses are accepted only through that local proxy boundary,
+and magic-link debug output is disabled.
 
 The deployment intentionally supports one web instance and one scheduler instance. SQLite WAL
 mode permits their normal concurrent reads and writes, but this v1 is not intended for horizontal
@@ -122,6 +127,20 @@ Apply migrations manually when needed:
 docker compose run --rm migrate alembic upgrade head
 ```
 
+The web and job processes no longer create tables automatically. They require the migration service
+to complete first, and the web process refuses to start when the database revision is behind.
+
+For an online SQLite backup, create the destination outside `data/` and verify that it can be opened:
+
+```bash
+mkdir -p backups
+sqlite3 data/paperpulse.db ".backup backups/paperpulse-$(date +%F).db"
+sqlite3 backups/paperpulse-$(date +%F).db "PRAGMA integrity_check;"
+```
+
+Expired sign-in links and sessions are removed nightly by the scheduler. They can also be cleaned
+manually with `docker compose run --rm jobs python -m api.jobs cleanup`.
+
 Do not copy only the main `.db` file while live WAL writes are in progress unless the backup tool
 also handles the WAL state.
 
@@ -138,8 +157,9 @@ ruff check api migrations
 python -m compileall -q api migrations
 ```
 
-The test suite covers authentication primitives, moderation, subscriptions, query construction,
-daily and weekly idempotency, web personalization, and legacy import.
+The test suite covers authentication and CSRF flows, live administrator authorization, moderation,
+subscriptions, query construction, concurrent daily and weekly execution, web personalization,
+Markdown sanitization, and legacy import.
 
 ## Configuration boundary
 

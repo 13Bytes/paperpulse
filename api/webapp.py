@@ -11,19 +11,29 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from itsdangerous import BadSignature, URLSafeSerializer
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 from sqlalchemy.orm import Session, selectinload
 
 from api.auth import (
+    allow_login_request,
+    allow_proposal,
     consume_magic_link,
     create_auth_session,
     get_auth_session,
     issue_magic_link,
-    rate_limiter,
     send_magic_link,
 )
-from api.database import create_schema, get_db
-from api.db_models import AuthSession, LegacyRedirect, Report, Subscription, Topic, TopicTerm, User
+from api.database import assert_schema_current, engine, get_db, schema_revisions
+from api.db_models import (
+    AuthSession,
+    JobRun,
+    LegacyRedirect,
+    Report,
+    Subscription,
+    Topic,
+    TopicTerm,
+    User,
+)
 from api.settings import load_app_settings, load_config
 from api.topic_service import create_topic, propose_terms, review_term, review_topic, split_values
 
@@ -71,7 +81,7 @@ templates.env.filters["render_markdown"] = _markdown
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    create_schema()
+    assert_schema_current()
     yield
 
 
@@ -115,7 +125,7 @@ def _require_user(db: Session, request: Request) -> User:
 
 def _require_admin(db: Session, request: Request) -> User:
     user = _require_user(db, request)
-    if not user.is_admin:
+    if user.email not in settings.admin_emails:
         raise HTTPException(403, "Administrator access required")
     return user
 
@@ -158,6 +168,7 @@ def _context(db: Session, request: Request, **values) -> dict:  # noqa: ANN003
     return {
         "request": request,
         "user": auth.user if auth else None,
+        "is_admin": bool(auth and auth.user.email in settings.admin_emails),
         "csrf_token": request.state.csrf_token,
         "site": config.get("blog", {}),
         **values,
@@ -167,6 +178,19 @@ def _context(db: Session, request: Request, **values) -> dict:  # noqa: ANN003
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
+
+
+@app.get("/ready")
+def readiness() -> dict:
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+        current, expected = schema_revisions()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(503, "Database readiness check failed") from exc
+    if current != expected:
+        raise HTTPException(503, "Database migration is required")
+    return {"status": "ready", "database_revision": current}
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -249,7 +273,7 @@ def propose_topic_action(
 ):
     _check_csrf(request, csrf_token)
     user = _require_user(db, request)
-    if not rate_limiter.allow(f"proposal:{user.id}", 10, 86_400):
+    if not allow_proposal(db, user.id):
         raise HTTPException(429, "Proposal limit reached; try again tomorrow")
     try:
         create_topic(
@@ -283,19 +307,38 @@ def propose_topic_action(
 
 
 @app.get("/topics/{slug}", response_class=HTMLResponse)
-def topic_detail(slug: str, request: Request, db: Session = Depends(get_db)):
+def topic_detail(slug: str, request: Request, page: int = 1, db: Session = Depends(get_db)):
+    page = max(page, 1)
+    page_size = 25
     topic = db.scalar(
         select(Topic)
-        .options(selectinload(Topic.terms), selectinload(Topic.reports))
+        .options(selectinload(Topic.terms))
         .where(Topic.slug == slug, Topic.status == "active")
     )
     if not topic:
         raise HTTPException(404)
-    topic.reports.sort(key=lambda report: report.published_at, reverse=True)
+    reports = list(
+        db.scalars(
+            select(Report)
+            .where(Report.topic_id == topic.id)
+            .order_by(Report.published_at.desc(), Report.id.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size + 1)
+        )
+    )
+    has_next = len(reports) > page_size
     return templates.TemplateResponse(
         request=request,
         name="topic_detail.html",
-        context=_context(db, request, topic=topic, error=None),
+        context=_context(
+            db,
+            request,
+            topic=topic,
+            reports=reports[:page_size],
+            page=page,
+            has_next=has_next,
+            error=None,
+        ),
     )
 
 
@@ -310,7 +353,7 @@ def suggest_terms(
 ):
     _check_csrf(request, csrf_token)
     user = _require_user(db, request)
-    if not rate_limiter.allow(f"proposal:{user.id}", 10, 86_400):
+    if not allow_proposal(db, user.id):
         raise HTTPException(429, "Proposal limit reached; try again tomorrow")
     topic = db.scalar(
         select(Topic)
@@ -327,7 +370,22 @@ def suggest_terms(
         return templates.TemplateResponse(
             request=request,
             name="topic_detail.html",
-            context=_context(db, request, topic=topic, error=str(exc)),
+            context=_context(
+                db,
+                request,
+                topic=topic,
+                reports=list(
+                    db.scalars(
+                        select(Report)
+                        .where(Report.topic_id == topic.id)
+                        .order_by(Report.published_at.desc(), Report.id.desc())
+                        .limit(25)
+                    )
+                ),
+                page=1,
+                has_next=False,
+                error=str(exc),
+            ),
             status_code=400,
         )
     return RedirectResponse("/account", status_code=303)
@@ -363,9 +421,9 @@ def request_login(
 ):
     _check_csrf(request, csrf_token)
     ip = request.client.host if request.client else "unknown"
-    if not rate_limiter.allow(f"login:{ip}", 5, 900):
-        raise HTTPException(429, "Too many sign-in requests")
     try:
+        if not allow_login_request(db, email, ip):
+            raise HTTPException(429, "Too many sign-in requests")
         link, token = issue_magic_link(db, email, ip)
         send_magic_link(settings, link.email, token)
         db.commit()
@@ -391,8 +449,23 @@ def request_login(
     )
 
 
-@app.get("/auth/verify")
-def verify_login(token: str, request: Request, db: Session = Depends(get_db)):
+@app.get("/auth/verify", response_class=HTMLResponse)
+def verify_login_page(token: str, request: Request, db: Session = Depends(get_db)):
+    return templates.TemplateResponse(
+        request=request,
+        name="verify_login.html",
+        context=_context(db, request, token=token),
+    )
+
+
+@app.post("/auth/verify")
+def verify_login(
+    request: Request,
+    csrf_token: str = Form(...),
+    token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    _check_csrf(request, csrf_token)
     user = consume_magic_link(db, token, settings)
     if not user:
         raise HTTPException(400, "This sign-in link is invalid or expired")
@@ -403,6 +476,12 @@ def verify_login(token: str, request: Request, db: Session = Depends(get_db)):
     )
     valid = set(
         db.scalars(select(Topic.id).where(Topic.id.in_(selected), Topic.status == "active"))
+    )
+    db.execute(
+        delete(Subscription).where(
+            Subscription.user_id == user.id,
+            Subscription.topic_id.not_in(valid),
+        )
     )
     for topic_id in valid:
         if not db.get(Subscription, (user.id, topic_id)):
@@ -435,14 +514,18 @@ def logout(request: Request, csrf_token: str = Form(...), db: Session = Depends(
 
 
 @app.get("/account", response_class=HTMLResponse)
-def account(request: Request, db: Session = Depends(get_db)):
+def account(request: Request, page: int = 1, db: Session = Depends(get_db)):
     user = _require_user(db, request)
+    page = max(page, 1)
+    page_size = 25
     topics = list(
         db.scalars(
             select(Topic)
             .options(selectinload(Topic.terms))
             .where(Topic.created_by_id == user.id)
             .order_by(Topic.created_at.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size + 1)
         )
     )
     terms = list(
@@ -451,27 +534,75 @@ def account(request: Request, db: Session = Depends(get_db)):
             .options(selectinload(TopicTerm.topic))
             .where(
                 TopicTerm.created_by_id == user.id,
-                TopicTerm.topic_id.not_in([topic.id for topic in topics]) if topics else True,
+                TopicTerm.topic_id.not_in(
+                    select(Topic.id).where(Topic.created_by_id == user.id)
+                ),
             )
             .order_by(TopicTerm.created_at.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size + 1)
         )
     )
+    has_next = len(topics) > page_size or len(terms) > page_size
     return templates.TemplateResponse(
         request=request,
         name="account.html",
-        context=_context(db, request, topics=topics, terms=terms),
+        context=_context(
+            db,
+            request,
+            topics=topics[:page_size],
+            terms=terms[:page_size],
+            page=page,
+            has_next=has_next,
+        ),
+    )
+
+
+@app.post("/account/delete")
+def delete_account(
+    request: Request,
+    csrf_token: str = Form(...),
+    confirmation: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    _check_csrf(request, csrf_token)
+    user = _require_user(db, request)
+    if confirmation.strip().casefold() != "delete":
+        raise HTTPException(400, "Type DELETE to confirm account deletion")
+    db.delete(user)
+    db.commit()
+    response = RedirectResponse("/", status_code=303)
+    response.delete_cookie("paperpulse_session")
+    return response
+
+
+@app.get("/privacy", response_class=HTMLResponse)
+def privacy_page(request: Request, db: Session = Depends(get_db)):
+    return templates.TemplateResponse(
+        request=request, name="privacy.html", context=_context(db, request)
+    )
+
+
+@app.get("/terms", response_class=HTMLResponse)
+def terms_page(request: Request, db: Session = Depends(get_db)):
+    return templates.TemplateResponse(
+        request=request, name="terms.html", context=_context(db, request)
     )
 
 
 @app.get("/admin", response_class=HTMLResponse)
-def admin_dashboard(request: Request, db: Session = Depends(get_db)):
+def admin_dashboard(request: Request, page: int = 1, db: Session = Depends(get_db)):
     _require_admin(db, request)
+    page = max(page, 1)
+    page_size = 25
     pending_topics = list(
         db.scalars(
             select(Topic)
             .options(selectinload(Topic.terms))
             .where(Topic.status == "pending")
             .order_by(Topic.created_at)
+            .offset((page - 1) * page_size)
+            .limit(page_size + 1)
         )
     )
     pending_terms = list(
@@ -480,23 +611,32 @@ def admin_dashboard(request: Request, db: Session = Depends(get_db)):
             .options(selectinload(TopicTerm.topic))
             .where(
                 TopicTerm.status == "pending",
-                TopicTerm.topic_id.not_in([topic.id for topic in pending_topics]),
+                TopicTerm.topic_id.not_in(select(Topic.id).where(Topic.status == "pending")),
             )
             .order_by(TopicTerm.created_at)
+            .offset((page - 1) * page_size)
+            .limit(page_size + 1)
         )
     )
     active_topics = list(
         db.scalars(select(Topic).where(Topic.status == "active").order_by(Topic.name))
     )
+    recent_jobs = list(
+        db.scalars(select(JobRun).order_by(JobRun.started_at.desc()).limit(50))
+    )
+    has_next = len(pending_topics) > page_size or len(pending_terms) > page_size
     return templates.TemplateResponse(
         request=request,
         name="admin.html",
         context=_context(
             db,
             request,
-            pending_topics=pending_topics,
-            pending_terms=pending_terms,
+            pending_topics=pending_topics[:page_size],
+            pending_terms=pending_terms[:page_size],
             active_topics=active_topics,
+            recent_jobs=recent_jobs,
+            page=page,
+            has_next=has_next,
             error=None,
         ),
     )
