@@ -13,6 +13,7 @@ from api import agent as agent_module
 from api import main as main_module
 from api.agent import PaperpulseAgent
 from api.arxiv_client import ArxivClient
+from api.auth import send_magic_link
 from api.codex_agent import CodexCliAgent
 from api.file_handler import FileHandler
 from api.settings import AppSettings, build_arxiv_query, load_app_settings, load_config, parse_bool
@@ -126,6 +127,68 @@ def test_load_app_settings_rejects_invalid_backend(monkeypatch):
 
     with pytest.raises(ValueError, match="LLM_BACKEND"):
         load_app_settings()
+
+
+def test_send_magic_link_uses_implicit_tls_on_port_465(monkeypatch, tmp_path):
+    calls = []
+
+    class FakeSMTP:
+        def __init__(self, host, port, **kwargs):
+            calls.append(("connect", host, port, kwargs))
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def starttls(self, **_kwargs):
+            calls.append(("starttls",))
+
+        def login(self, username, password):
+            calls.append(("login", username, password))
+
+        def send_message(self, message):
+            calls.append(("send", message["To"]))
+
+    monkeypatch.setattr("api.auth.smtplib.SMTP_SSL", FakeSMTP)
+    monkeypatch.setattr(
+        "api.auth.smtplib.SMTP",
+        lambda *_args, **_kwargs: pytest.fail("Port 465 must use implicit TLS"),
+    )
+    settings = AppSettings(
+        project_env="test",
+        project_dir=tmp_path,
+        openai_model="unused",
+        smtp_host="smtp.example.com",
+        smtp_port=465,
+        smtp_username="sender@example.com",
+        smtp_password="secret",
+        smtp_starttls=True,
+    )
+
+    send_magic_link(settings, "reader@example.com", "token")
+
+    assert calls[0][0:3] == ("connect", "smtp.example.com", 465)
+    assert "context" in calls[0][3]
+    assert ("starttls",) not in calls
+    assert calls[-1] == ("send", "reader@example.com")
+
+
+def test_send_magic_link_wraps_smtp_failures(monkeypatch, tmp_path):
+    def fail_connect(*_args, **_kwargs):
+        raise TimeoutError("SMTP timed out")
+
+    monkeypatch.setattr("api.auth.smtplib.SMTP", fail_connect)
+    settings = AppSettings(
+        project_env="test",
+        project_dir=tmp_path,
+        openai_model="unused",
+        smtp_host="smtp.example.com",
+    )
+
+    with pytest.raises(RuntimeError, match="couldn't send"):
+        send_magic_link(settings, "reader@example.com", "token")
 
 
 class TestArxivClient:
@@ -279,8 +342,8 @@ class TestPaperpulseAgent:
 
         assert summary == "combined summary"
         assert [call[0] for call in FakeRunner.calls] == [
-            "Engineering Research Summariser",
-            "Engineering Research Summariser",
+            "Interdisciplinary Research Summariser",
+            "Interdisciplinary Research Summariser",
             "Summary Combiner",
         ]
 

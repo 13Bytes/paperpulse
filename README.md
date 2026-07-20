@@ -98,7 +98,8 @@ Set all required values referenced by `docker-compose.prod.yml`, especially:
 - `PUBLIC_BASE_URL` with the external HTTPS origin
 - a long random `SESSION_SECRET`
 - `ADMIN_EMAILS`
-- `SMTP_HOST` and `SMTP_FROM`, plus credentials when required
+- `SMTP_HOST` and `SMTP_FROM`, plus credentials when required. Port 465 uses implicit TLS;
+  port 587 uses `SMTP_STARTTLS`.
 
 Then start the migration, web, and scheduler services:
 

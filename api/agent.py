@@ -44,7 +44,7 @@ class PaperpulseAgent:
 
         model = model or load_app_settings().openai_model
         self.summarizer = SDKAgent(
-            name="Engineering Research Summariser",
+            name="Interdisciplinary Research Summariser",
             instructions=build_summary_prompt(config),
             model=model,
             model_settings=ModelSettings(

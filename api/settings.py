@@ -199,7 +199,7 @@ Your goal is to write a single, coherent blogpost-style summary (under 5000 word
 that summarises key developments and groups these into major themes.
 
 For each theme:
-1. Use a clear, descriptive heading (e.g., "Theme 1: Agentic Design Pipelines")
+1. Use a clear, descriptive heading (e.g., "Theme 1: New Methods and Emerging Evidence")
 2. Highlight the most important developments and insights within that theme
 3. Mention specific papers when relevant to illustrate points
 4. If you mention specific papers, make sure to mention the complete title

@@ -4,6 +4,7 @@ import hashlib
 import re
 import secrets
 import smtplib
+import ssl
 from datetime import timedelta
 from email.message import EmailMessage
 
@@ -126,9 +127,22 @@ def send_magic_link(settings: AppSettings, recipient: str, token: str) -> None:
     message["From"] = settings.smtp_from
     message["To"] = recipient
     message.set_content(f"Sign in to Paperpulse using this link (valid for 15 minutes):\n\n{url}")
-    with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=20) as smtp:
-        if settings.smtp_starttls:
-            smtp.starttls()
-        if settings.smtp_username:
-            smtp.login(settings.smtp_username, settings.smtp_password or "")
-        smtp.send_message(message)
+    tls_context = ssl.create_default_context()
+    try:
+        if settings.smtp_port == 465:
+            smtp_client = smtplib.SMTP_SSL(
+                settings.smtp_host,
+                settings.smtp_port,
+                timeout=20,
+                context=tls_context,
+            )
+        else:
+            smtp_client = smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=20)
+        with smtp_client as smtp:
+            if settings.smtp_starttls and settings.smtp_port != 465:
+                smtp.starttls(context=tls_context)
+            if settings.smtp_username:
+                smtp.login(settings.smtp_username, settings.smtp_password or "")
+            smtp.send_message(message)
+    except (OSError, smtplib.SMTPException) as exc:
+        raise RuntimeError("We couldn't send the sign-in email. Please try again shortly.") from exc

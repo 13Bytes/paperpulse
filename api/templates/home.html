@@ -1,13 +1,13 @@
 {% extends "base.html" %}
 {% block content %}
 <section class="hero">
-  <p class="eyebrow">Your research signal</p>
+  <p class="eyebrow">Research without boundaries</p>
   <h1>{{ site.tagline or 'Research reports tailored to your interests' }}</h1>
   <p>{{ site.description }}</p>
 </section>
 {% if not selected %}
 <section class="panel onboarding">
-  <h2>Choose the topics you care about</h2>
+  <h2>Whatever your field, start with what interests you</h2>
   <p>Your selection stays in this browser. Sign in later to sync it elsewhere.</p>
   <form action="/subscriptions" method="post">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">

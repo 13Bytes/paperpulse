@@ -221,7 +221,7 @@ def test_anonymous_selection_filters_home_feed(db_factory):
         client = TestClient(app)
         initial = client.get("/")
         assert initial.status_code == 200
-        assert "Choose the topics" in initial.text
+        assert "Whatever your field, start with what interests you" in initial.text
         csrf = client.cookies["paperpulse_csrf"]
         response = client.post(
             "/subscriptions",
