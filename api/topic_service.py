@@ -122,6 +122,74 @@ def propose_terms(
     return created
 
 
+def edit_topic(
+    db: Session,
+    topic: Topic,
+    admin: User,
+    *,
+    name: str,
+    description: str,
+    categories: list[str],
+    keywords: list[str],
+) -> None:
+    """Replace an active topic's editable fields and active search terms."""
+    name = " ".join(name.split())
+    description = description.strip()
+    if len(name) < 3 or len(name) > 100:
+        raise ValueError("Topic name must contain 3–100 characters")
+    if len(description) < 10:
+        raise ValueError("Please provide a short topic description")
+
+    normalized_name = normalize(name)
+    duplicate = db.scalar(
+        select(Topic).where(
+            Topic.name_normalized == normalized_name,
+            Topic.id != topic.id,
+        )
+    )
+    if duplicate:
+        raise ValueError("A topic with this name already exists or is pending")
+
+    categories = validate_categories(categories)
+    keywords = list(dict.fromkeys(" ".join(value.split()) for value in keywords if value.strip()))
+    if not categories or not keywords:
+        raise ValueError("At least one category and one keyword are required")
+    if len(categories) > 20 or len(keywords) > 30:
+        raise ValueError("Too many search terms")
+
+    topic.name = name
+    topic.name_normalized = normalized_name
+    topic.description = description
+
+    for kind, values in (("category", categories), ("keyword", keywords)):
+        desired = {normalize(value): value for value in values}
+        existing = {term.value_normalized: term for term in topic.terms if term.kind == kind}
+
+        for value_normalized, value in desired.items():
+            term = existing.get(value_normalized)
+            if term is None:
+                term = TopicTerm(
+                    topic_id=topic.id,
+                    kind=kind,
+                    value_normalized=value_normalized,
+                    created_by_id=admin.id,
+                )
+                db.add(term)
+                topic.terms.append(term)
+            term.value = value
+            term.status = "active"
+            term.reviewed_by_id = admin.id
+            term.reviewed_at = utcnow()
+            term.review_reason = None
+
+        for value_normalized, term in existing.items():
+            if term.status == "active" and value_normalized not in desired:
+                term.status = "rejected"
+                term.reviewed_by_id = admin.id
+                term.reviewed_at = utcnow()
+                term.review_reason = "Removed by administrator"
+
+
 def review_topic(db: Session, topic: Topic, admin: User, approved: bool, reason: str = "") -> None:
     now = utcnow()
     topic.status = "active" if approved else "rejected"

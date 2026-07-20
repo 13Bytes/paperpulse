@@ -3,6 +3,7 @@
 import copy
 import logging
 import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 
@@ -157,7 +158,12 @@ def _finish(db: Session, claim: JobClaim, status: str, message: str) -> None:
     logger.info("Finished job %s with status %s: %s", claim.id, status, message)
 
 
-def run_daily(*, now: datetime | None = None, session_factory=SessionLocal) -> BatchResult:
+def run_daily(
+    *,
+    now: datetime | None = None,
+    session_factory=SessionLocal,
+    topic_ids: Iterable[int] | None = None,
+) -> BatchResult:
     now = now or datetime.now(UTC)
     if now.tzinfo is None:
         now = now.replace(tzinfo=UTC)
@@ -166,8 +172,11 @@ def run_daily(*, now: datetime | None = None, session_factory=SessionLocal) -> B
     settings = load_app_settings()
     counts = {"succeeded": 0, "skipped": 0, "failed": 0}
     with session_factory() as db:
+        topic_query = select(Topic.id).where(Topic.status == "active")
+        if topic_ids is not None:
+            topic_query = topic_query.where(Topic.id.in_(set(topic_ids)))
         topic_ids = list(
-            db.scalars(select(Topic.id).where(Topic.status == "active").order_by(Topic.id))
+            db.scalars(topic_query.order_by(Topic.id))
         )
     for topic_id in topic_ids:
         with session_factory() as db:

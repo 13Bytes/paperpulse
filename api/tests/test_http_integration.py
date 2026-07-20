@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 from itsdangerous import URLSafeSerializer
 from sqlalchemy import select
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import selectinload, sessionmaker
 
 from api.auth import create_auth_session
 from api.database import create_db_engine, create_schema, get_db
@@ -146,8 +146,17 @@ def _active_topic(db, name: str, creator=None) -> Topic:
         ),
         ("/admin/topics/1/review", {"action": "approve"}),
         ("/admin/terms/1/review", {"action": "approve"}),
-        ("/admin/topics/1/edit", {"description": "Updated detailed description."}),
+        (
+            "/admin/topics/1/edit",
+            {
+                "name": "Updated topic",
+                "description": "Updated detailed description.",
+                "categories": "cs.AI",
+                "keywords": "updated",
+            },
+        ),
         ("/admin/topics/1/archive", {}),
+        ("/admin/topics/1/generate-report", {}),
     ],
 )
 def test_every_mutating_route_rejects_bad_csrf(http_client, path, data):
@@ -173,8 +182,18 @@ def test_every_mutating_route_rejects_bad_csrf(http_client, path, data):
         ),
         ("post", "/admin/topics/1/review", {"action": "approve"}),
         ("post", "/admin/terms/1/review", {"action": "approve"}),
-        ("post", "/admin/topics/1/edit", {"description": "Updated description"}),
+        (
+            "post",
+            "/admin/topics/1/edit",
+            {
+                "name": "Updated topic",
+                "description": "Updated description",
+                "categories": "cs.AI",
+                "keywords": "updated",
+            },
+        ),
         ("post", "/admin/topics/1/archive", {}),
+        ("post", "/admin/topics/1/generate-report", {}),
     ],
 )
 def test_admin_routes_reject_unauthenticated_users(http_client, method, path, data):
@@ -203,8 +222,18 @@ def test_admin_routes_reject_unauthenticated_users(http_client, method, path, da
         ),
         ("post", "/admin/topics/1/review", {"action": "approve"}),
         ("post", "/admin/terms/1/review", {"action": "approve"}),
-        ("post", "/admin/topics/1/edit", {"description": "Updated description"}),
+        (
+            "post",
+            "/admin/topics/1/edit",
+            {
+                "name": "Updated topic",
+                "description": "Updated description",
+                "categories": "cs.AI",
+                "keywords": "updated",
+            },
+        ),
         ("post", "/admin/topics/1/archive", {}),
+        ("post", "/admin/topics/1/generate-report", {}),
     ],
 )
 def test_admin_routes_reject_signed_in_non_admins(
@@ -430,6 +459,80 @@ def test_admin_can_approve_topic_and_reject_term_with_required_reason(
         assert (reviewed_term.status, reviewed_term.review_reason) == ("rejected", "Too broad")
         proposer_id = db.scalar(select(User.id).where(User.email == "proposer@example.com"))
         assert db.get(Subscription, (proposer_id, pending_id)) is not None
+
+
+def test_admin_active_topic_form_loads_and_replaces_search_terms(http_client, db_factory):
+    with db_factory() as db:
+        admin = User(email=ADMIN_EMAIL)
+        db.add(admin)
+        db.flush()
+        topic = _active_topic(db, "Editable Vision", creator=admin)
+        pending = propose_terms(db, topic, admin, ["cs.RO"], ["pending marker"])
+        _auth, raw_token = create_auth_session(db, admin)
+        db.commit()
+        topic_id = topic.id
+        pending_ids = [term.id for term in pending]
+
+    http_client.cookies.set("paperpulse_session", raw_token)
+    page = http_client.get("/admin")
+    assert page.status_code == 200
+    assert '<textarea name="categories" required>cs.AI</textarea>' in page.text
+    assert '<textarea name="keywords" required>Editable Vision research</textarea>' in page.text
+    assert "pending marker" not in page.text.split("<h2>Active topics</h2>", 1)[1]
+
+    response = http_client.post(
+        f"/admin/topics/{topic_id}/edit",
+        data={
+            "csrf_token": _csrf(http_client),
+            "name": "Edited Vision",
+            "description": "An updated and sufficiently detailed topic description.",
+            "categories": "cs.CV\ncs.LG",
+            "keywords": "visual reasoning\nmultimodal learning",
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+    with db_factory() as db:
+        edited = db.scalar(
+            select(Topic).options(selectinload(Topic.terms)).where(Topic.id == topic_id)
+        )
+        assert edited.name == "Edited Vision"
+        active_terms = {(term.kind, term.value) for term in edited.terms if term.status == "active"}
+        assert active_terms == {
+            ("category", "cs.CV"),
+            ("category", "cs.LG"),
+            ("keyword", "visual reasoning"),
+            ("keyword", "multimodal learning"),
+        }
+        assert all(db.get(TopicTerm, term_id).status == "pending" for term_id in pending_ids)
+
+
+def test_admin_can_trigger_daily_report_for_one_active_topic(
+    http_client, db_factory, monkeypatch
+):
+    with db_factory() as db:
+        admin = User(email=ADMIN_EMAIL)
+        db.add(admin)
+        db.flush()
+        topic = _active_topic(db, "Manual Report", creator=admin)
+        _auth, raw_token = create_auth_session(db, admin)
+        db.commit()
+        topic_id = topic.id
+
+    calls = []
+    monkeypatch.setattr(
+        "api.webapp.run_daily", lambda **kwargs: calls.append(kwargs)
+    )
+    http_client.cookies.set("paperpulse_session", raw_token)
+    response = http_client.post(
+        f"/admin/topics/{topic_id}/generate-report",
+        data={"csrf_token": _csrf(http_client)},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert calls == [{"topic_ids": (topic_id,)}]
 
 
 def test_report_markdown_is_sanitized_before_rendering(http_client, db_factory):

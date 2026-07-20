@@ -6,7 +6,7 @@ from pathlib import Path
 
 import bleach
 import markdown
-from fastapi import Depends, FastAPI, Form, HTTPException, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -34,8 +34,16 @@ from api.db_models import (
     TopicTerm,
     User,
 )
+from api.pipeline import run_daily
 from api.settings import load_app_settings, load_config
-from api.topic_service import create_topic, propose_terms, review_term, review_topic, split_values
+from api.topic_service import (
+    create_topic,
+    edit_topic,
+    propose_terms,
+    review_term,
+    review_topic,
+    split_values,
+)
 
 ROOT = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=ROOT / "templates")
@@ -619,7 +627,12 @@ def admin_dashboard(request: Request, page: int = 1, db: Session = Depends(get_d
         )
     )
     active_topics = list(
-        db.scalars(select(Topic).where(Topic.status == "active").order_by(Topic.name))
+        db.scalars(
+            select(Topic)
+            .options(selectinload(Topic.terms))
+            .where(Topic.status == "active")
+            .order_by(Topic.name)
+        )
     )
     recent_jobs = list(
         db.scalars(select(JobRun).order_by(JobRun.started_at.desc()).limit(50))
@@ -718,9 +731,10 @@ def admin_edit_topic(
     topic_id: int,
     request: Request,
     csrf_token: str = Form(...),
+    name: str = Form(...),
     description: str = Form(...),
-    categories: str = Form(default=""),
-    keywords: str = Form(default=""),
+    categories: str = Form(...),
+    keywords: str = Form(...),
     db: Session = Depends(get_db),
 ):
     _check_csrf(request, csrf_token)
@@ -728,11 +742,16 @@ def admin_edit_topic(
     topic = db.scalar(select(Topic).options(selectinload(Topic.terms)).where(Topic.id == topic_id))
     if not topic or topic.status != "active":
         raise HTTPException(404)
-    topic.description = description.strip()
     try:
-        propose_terms(
-            db, topic, admin, split_values(categories), split_values(keywords), status="active"
-        ) if categories.strip() or keywords.strip() else None
+        edit_topic(
+            db,
+            topic,
+            admin,
+            name=name,
+            description=description,
+            categories=split_values(categories),
+            keywords=split_values(keywords),
+        )
         db.commit()
     except ValueError as exc:
         db.rollback()
@@ -751,6 +770,25 @@ def admin_archive_topic(
         raise HTTPException(404)
     topic.status = "archived"
     db.commit()
+    return RedirectResponse("/admin", status_code=303)
+
+
+@app.post("/admin/topics/{topic_id}/generate-report")
+def admin_generate_report(
+    topic_id: int,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    _check_csrf(request, csrf_token)
+    _require_admin(db, request)
+    topic = db.scalar(
+        select(Topic.id).where(Topic.id == topic_id, Topic.status == "active")
+    )
+    if topic is None:
+        raise HTTPException(404)
+    background_tasks.add_task(run_daily, topic_ids=(topic_id,))
     return RedirectResponse("/admin", status_code=303)
 
 

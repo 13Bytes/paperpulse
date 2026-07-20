@@ -99,6 +99,33 @@ def test_stale_running_job_is_reclaimed(db_factory):
         assert job.claim_token == claim.token
 
 
+def test_daily_run_can_be_scoped_to_one_topic(monkeypatch, db_factory):
+    with db_factory() as db:
+        selected = add_active_topic(db, "Selected topic")
+        add_active_topic(db, "Unselected topic")
+        db.commit()
+        selected_id = selected.id
+
+    class NoResultsArxiv:
+        def __init__(self, *_args):
+            pass
+
+        def retrieve_daily_results(self, now=None):
+            return []
+
+    monkeypatch.setattr("api.pipeline.ArxivClient", NoResultsArxiv)
+    monkeypatch.setattr("api.pipeline.load_config", lambda: {"summarization": {}})
+    result = run_daily(
+        now=datetime(2026, 7, 16, 6, tzinfo=UTC),
+        session_factory=db_factory,
+        topic_ids=(selected_id,),
+    )
+
+    assert result.skipped == 1
+    with db_factory() as db:
+        assert set(db.scalars(select(JobRun.topic_id))) == {selected_id}
+
+
 def test_failed_topic_retries_without_blocking_other_topics(monkeypatch, db_factory, sample_paper):
     with db_factory() as db:
         first = add_active_topic(db, "Failure then recovery")
