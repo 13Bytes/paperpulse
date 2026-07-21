@@ -27,6 +27,7 @@ from api.utils import add_markdown_links
 
 logger = logging.getLogger(__name__)
 JOB_STALE_AFTER = timedelta(hours=2)
+DAILY_BOUNDARY_HOUR_UTC = 6
 
 
 @dataclass(frozen=True)
@@ -46,6 +47,22 @@ class LostJobClaim(RuntimeError):
     """Raised when a stale worker tries to finish a job claimed by another worker."""
 
 
+def daily_window(now: datetime | None = None) -> tuple[datetime, datetime]:
+    """Return the most recently completed 06:00–06:00 UTC reporting window."""
+    current = now or datetime.now(UTC)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=UTC)
+    current = current.astimezone(UTC)
+    boundary = current.replace(
+        hour=DAILY_BOUNDARY_HOUR_UTC,
+        minute=0,
+        second=0,
+        microsecond=0,
+    )
+    window_end = boundary if current >= boundary else boundary - timedelta(days=1)
+    return window_end - timedelta(days=1), window_end
+
+
 def topic_config(topic: Topic, base_config: dict) -> dict:
     config = copy.deepcopy(base_config)
     config["topic"] = {"name": topic.name, "description": topic.description}
@@ -60,7 +77,7 @@ def topic_config(topic: Topic, base_config: dict) -> dict:
 def _claim_job(
     db: Session, topic_id: int, kind: str, start: date, end: date
 ) -> JobClaim | None:
-    """Atomically claim a new, failed, or stale job and publish the claim immediately."""
+    """Atomically claim a new, retryable, or stale job and publish it immediately."""
     now = utcnow()
     token = str(uuid.uuid4())
     job = JobRun(
@@ -99,6 +116,7 @@ def _claim_job(
             JobRun.period_end == end,
             or_(
                 JobRun.status == "failed",
+                JobRun.status == "skipped",
                 and_(JobRun.status == "running", JobRun.started_at <= stale_before),
             ),
         )
@@ -167,11 +185,14 @@ def run_daily(
     now = now or datetime.now(UTC)
     if now.tzinfo is None:
         now = now.replace(tzinfo=UTC)
-    report_day = now.date() - timedelta(days=1)
+    window_start, window_end = daily_window(now)
+    report_day = window_start.date()
     requested_topic_ids = None if topic_ids is None else set(topic_ids)
     logger.info(
-        "Starting daily report batch for %s (requested topics: %s)",
+        "Starting daily report batch for %s (%s to %s; requested topics: %s)",
         report_day,
+        window_start,
+        window_end,
         "all active" if requested_topic_ids is None else sorted(requested_topic_ids),
     )
     base_config = load_config()
@@ -235,7 +256,10 @@ def run_daily(
                         "Retrieving ArXiv papers for topic %s (%s)", topic.id, topic.name
                     )
                     client = ArxivClient(query, ARXIV_SORT_BY, ARXIV_SORT_ORDER)
-                    papers_by_query[query] = client.retrieve_daily_results(now=now)
+                    papers_by_query[query] = client.retrieve_daily_results(
+                        window_start=window_start,
+                        window_end=window_end,
+                    )
                 else:
                     logger.info("Reusing retrieved papers for topic %s", topic_id)
                 papers = list(papers_by_query[query])
@@ -246,7 +270,13 @@ def run_daily(
                     topic.name,
                 )
                 if not papers:
-                    _finish(db, claim, "skipped", "No matching papers")
+                    _finish(
+                        db,
+                        claim,
+                        "skipped",
+                        f"No matching papers from {window_start.isoformat()} "
+                        f"until {window_end.isoformat()}",
+                    )
                     db.commit()
                     counts["skipped"] += 1
                     continue

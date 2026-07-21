@@ -111,7 +111,7 @@ def test_daily_pipeline_is_per_topic_idempotent_and_skips_archived(
             self.query = query
             self.queries.append(query)
 
-        def retrieve_daily_results(self, now=None):
+        def retrieve_daily_results(self, **_kwargs):
             return [sample_paper]
 
     class FakeBackend:

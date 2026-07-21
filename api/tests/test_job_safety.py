@@ -11,7 +11,7 @@ from sqlalchemy.orm import sessionmaker
 
 from api.database import create_db_engine, create_schema
 from api.db_models import JobRun, Report, utcnow
-from api.pipeline import JOB_STALE_AFTER, _claim_job, run_daily
+from api.pipeline import JOB_STALE_AFTER, _claim_job, daily_window, run_daily
 from api.settings import AppSettings
 from api.topic_service import create_topic
 
@@ -99,6 +99,32 @@ def test_stale_running_job_is_reclaimed(db_factory):
         assert job.claim_token == claim.token
 
 
+@pytest.mark.parametrize(
+    ("now", "expected_start", "expected_end"),
+    [
+        (
+            datetime(2026, 7, 21, 5, 59, tzinfo=UTC),
+            datetime(2026, 7, 19, 6, tzinfo=UTC),
+            datetime(2026, 7, 20, 6, tzinfo=UTC),
+        ),
+        (
+            datetime(2026, 7, 21, 6, tzinfo=UTC),
+            datetime(2026, 7, 20, 6, tzinfo=UTC),
+            datetime(2026, 7, 21, 6, tzinfo=UTC),
+        ),
+        (
+            datetime(2026, 7, 21, 23, tzinfo=UTC),
+            datetime(2026, 7, 20, 6, tzinfo=UTC),
+            datetime(2026, 7, 21, 6, tzinfo=UTC),
+        ),
+    ],
+)
+def test_daily_window_uses_most_recent_completed_six_utc_boundary(
+    now, expected_start, expected_end
+):
+    assert daily_window(now) == (expected_start, expected_end)
+
+
 def test_daily_run_can_be_scoped_to_one_topic(monkeypatch, db_factory):
     with db_factory() as db:
         selected = add_active_topic(db, "Selected topic")
@@ -107,23 +133,44 @@ def test_daily_run_can_be_scoped_to_one_topic(monkeypatch, db_factory):
         selected_id = selected.id
 
     class NoResultsArxiv:
+        calls = []
+
         def __init__(self, *_args):
             pass
 
-        def retrieve_daily_results(self, now=None):
+        def retrieve_daily_results(self, **kwargs):
+            self.calls.append(kwargs)
             return []
 
     monkeypatch.setattr("api.pipeline.ArxivClient", NoResultsArxiv)
     monkeypatch.setattr("api.pipeline.load_config", lambda: {"summarization": {}})
-    result = run_daily(
-        now=datetime(2026, 7, 16, 6, tzinfo=UTC),
+    first = run_daily(
+        now=datetime(2026, 7, 16, 21, tzinfo=UTC),
+        session_factory=db_factory,
+        topic_ids=(selected_id,),
+    )
+    retry = run_daily(
+        now=datetime(2026, 7, 16, 23, tzinfo=UTC),
         session_factory=db_factory,
         topic_ids=(selected_id,),
     )
 
-    assert result.skipped == 1
+    assert first.skipped == retry.skipped == 1
+    assert NoResultsArxiv.calls == [
+        {
+            "window_start": datetime(2026, 7, 15, 6, tzinfo=UTC),
+            "window_end": datetime(2026, 7, 16, 6, tzinfo=UTC),
+        },
+        {
+            "window_start": datetime(2026, 7, 15, 6, tzinfo=UTC),
+            "window_end": datetime(2026, 7, 16, 6, tzinfo=UTC),
+        },
+    ]
     with db_factory() as db:
         assert set(db.scalars(select(JobRun.topic_id))) == {selected_id}
+        job = db.scalar(select(JobRun))
+        assert job.status == "skipped"
+        assert job.attempt_count == 2
 
 
 def test_failed_topic_retries_without_blocking_other_topics(monkeypatch, db_factory, sample_paper):
@@ -138,7 +185,7 @@ def test_failed_topic_retries_without_blocking_other_topics(monkeypatch, db_fact
         def __init__(self, query, *_args):
             self.query = query
 
-        def retrieve_daily_results(self, now=None):
+        def retrieve_daily_results(self, **_kwargs):
             return [sample_paper]
 
     class FakeBackend:

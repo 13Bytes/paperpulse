@@ -210,7 +210,7 @@ class TestArxivClient:
                 <author><name>Ada Lovelace</name></author>
                 <summary>Summary 1</summary>
                 <id>https://arxiv.org/abs/2601.00001</id>
-                <updated>2026-01-02T12:00:00Z</updated>
+                <updated>2026-01-02T11:59:59Z</updated>
             </entry>
             <entry>
                 <title>Still recent</title>
@@ -233,6 +233,35 @@ class TestArxivClient:
         papers = client.retrieve_daily_results(now=datetime(2026, 1, 2, 12, tzinfo=UTC))
 
         assert [paper["title"] for paper in papers] == ["Newest", "Still recent"]
+
+    def test_retrieve_daily_results_uses_explicit_half_open_window(self):
+        feed = """<?xml version="1.0" encoding="UTF-8"?>
+        <feed xmlns="http://www.w3.org/2005/Atom">
+            <entry><title>After window</title><author><name>A</name></author>
+              <summary>Later</summary><id>https://arxiv.org/abs/1</id>
+              <updated>2026-01-02T07:00:00Z</updated></entry>
+            <entry><title>At window end</title><author><name>B</name></author>
+              <summary>Boundary</summary><id>https://arxiv.org/abs/2</id>
+              <updated>2026-01-02T06:00:00Z</updated></entry>
+            <entry><title>Inside window</title><author><name>C</name></author>
+              <summary>Inside</summary><id>https://arxiv.org/abs/3</id>
+              <updated>2026-01-02T05:59:59Z</updated></entry>
+            <entry><title>At window start</title><author><name>D</name></author>
+              <summary>Boundary</summary><id>https://arxiv.org/abs/4</id>
+              <updated>2026-01-01T06:00:00Z</updated></entry>
+            <entry><title>Before window</title><author><name>E</name></author>
+              <summary>Earlier</summary><id>https://arxiv.org/abs/5</id>
+              <updated>2026-01-01T05:59:59Z</updated></entry>
+        </feed>
+        """
+        client = ArxivClient(urlopen=lambda _url: FakeResponse(feed), sleep=lambda _seconds: None)
+
+        papers = client.retrieve_daily_results(
+            window_start=datetime(2026, 1, 1, 6, tzinfo=UTC),
+            window_end=datetime(2026, 1, 2, 6, tzinfo=UTC),
+        )
+
+        assert [paper["title"] for paper in papers] == ["Inside window", "At window start"]
 
     def test_retrieve_daily_results_returns_partial_results_after_retries(self):
         sleeps = []

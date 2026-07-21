@@ -20,6 +20,8 @@ but report generation now runs independently for every active topic.
 - Administrator dashboard with curated topic creation and archiving
 - SQLite persistence with Alembic migrations, foreign keys, and WAL mode
 - Daily jobs at 06:00 UTC and Monday weekly jobs at 07:00 UTC
+- Every daily run targets the most recently completed 06:00–06:00 UTC window,
+  including manual runs started later in the day
 - One ArXiv download per distinct topic query in each daily batch
 - Atomic job claims, stale-job recovery, and an administrator job history
 - Structured job progress in Docker and scheduler logs (`LOG_LEVEL` defaults to `INFO`)

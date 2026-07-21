@@ -56,11 +56,16 @@ class ArxivClient:
         max_retries: int = 5,
         result_limit: int = 1200,
         now: datetime | None = None,
+        window_start: datetime | None = None,
+        window_end: datetime | None = None,
     ) -> list[Paper]:
         """
-        Retrieve papers updated within the previous 24 hours.
-        Results are fetched in descending update order until the first entry at
-        or before the cutoff is encountered.
+        Retrieve papers updated within ``[window_start, window_end)``.
+
+        Results are fetched in descending update order. Entries newer than the
+        window are skipped and retrieval stops once an entry predates it. When
+        no explicit window is supplied, retain the legacy rolling 24-hour range
+        ending at ``now`` for callers outside the scheduled pipeline.
 
         Args:
             None
@@ -70,11 +75,22 @@ class ArxivClient:
         """
         papers = []
         desired_timezone = UTC
-        now = now or datetime.now(desired_timezone)
-        if now.tzinfo is None:
-            now = now.replace(tzinfo=desired_timezone)
-        one_day_ago = now.astimezone(desired_timezone) - timedelta(days=1)
-        logger.info("Retrieving papers updated after %s", one_day_ago)
+        if (window_start is None) != (window_end is None):
+            raise ValueError("window_start and window_end must be supplied together")
+        if window_start is None:
+            window_end = now or datetime.now(desired_timezone)
+            if window_end.tzinfo is None:
+                window_end = window_end.replace(tzinfo=desired_timezone)
+            window_start = window_end - timedelta(days=1)
+        if window_start.tzinfo is None:
+            window_start = window_start.replace(tzinfo=desired_timezone)
+        if window_end.tzinfo is None:
+            window_end = window_end.replace(tzinfo=desired_timezone)
+        window_start = window_start.astimezone(desired_timezone)
+        window_end = window_end.astimezone(desired_timezone)
+        if window_start >= window_end:
+            raise ValueError("window_start must be before window_end")
+        logger.info("Retrieving papers updated from %s until %s", window_start, window_end)
 
         start = 0
 
@@ -139,13 +155,15 @@ class ArxivClient:
                 updated_date = datetime.strptime(updated_date_str, "%Y-%m-%dT%H:%M:%S%z")
                 updated_date = updated_date.astimezone(desired_timezone)
 
-                if updated_date > one_day_ago:
+                if updated_date >= window_end:
+                    continue
+                if updated_date >= window_start:
                     papers.append(self._process_paper_entry(entry))
                 else:
                     logger.info(
-                        "Reached cutoff at %s; latest cutoff is %s",
+                        "Reached start of retrieval window at %s (start: %s)",
                         updated_date,
-                        one_day_ago,
+                        window_start,
                     )
                     return papers
 
