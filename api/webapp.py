@@ -2,6 +2,7 @@
 
 import secrets
 from contextlib import asynccontextmanager
+from datetime import date
 from pathlib import Path
 
 import bleach
@@ -220,6 +221,92 @@ def home(request: Request, db: Session = Depends(get_db)):
         request=request,
         name="home.html",
         context=_context(db, request, topics=topics, selected=selected, reports=reports),
+    )
+
+
+@app.get("/feed", response_class=HTMLResponse)
+def feed_archive(request: Request, db: Session = Depends(get_db)):
+    """List daily-report dates available for the visitor's selected topics."""
+    selected = _selected_topics(db, request)
+    active_selected = set(
+        db.scalars(
+            select(Topic.id).where(Topic.status == "active", Topic.id.in_(selected))
+        )
+    )
+    days = []
+    if active_selected:
+        days = list(
+            db.scalars(
+                select(Report.period_start)
+                .where(Report.topic_id.in_(active_selected), Report.kind == "daily")
+                .distinct()
+                .order_by(Report.period_start.desc())
+            )
+        )
+
+    months = []
+    for day in days:
+        month_label = day.strftime("%B %Y")
+        entry = {"date": day.isoformat(), "label": day.strftime("%b %d, %a")}
+        if months and months[-1]["label"] == month_label:
+            months[-1]["entries"].append(entry)
+        else:
+            months.append({"label": month_label, "entries": [entry]})
+
+    return templates.TemplateResponse(
+        request=request,
+        name="feed_archive.html",
+        context=_context(
+            db,
+            request,
+            months=months,
+            has_selection=bool(active_selected),
+        ),
+    )
+
+
+@app.get("/feed/{day}", response_class=HTMLResponse)
+def feed_day(day: str, request: Request, db: Session = Depends(get_db)):
+    """Render every selected topic's daily report for one available date."""
+    try:
+        report_day = date.fromisoformat(day)
+    except ValueError:
+        return RedirectResponse("/feed", status_code=302)
+
+    selected = _selected_topics(db, request)
+    topics = list(
+        db.scalars(
+            select(Topic)
+            .where(Topic.status == "active", Topic.id.in_(selected))
+            .order_by(Topic.name)
+        )
+    )
+    if not topics:
+        return RedirectResponse("/feed", status_code=302)
+
+    reports = list(
+        db.scalars(
+            select(Report)
+            .options(selectinload(Report.topic))
+            .where(
+                Report.topic_id.in_({topic.id for topic in topics}),
+                Report.kind == "daily",
+                Report.period_start == report_day,
+            )
+            .order_by(Report.topic_id)
+        )
+    )
+    if not reports:
+        return RedirectResponse("/feed", status_code=302)
+
+    reports_by_topic = {report.topic_id: report for report in reports}
+    sections = [
+        {"topic": topic, "report": reports_by_topic.get(topic.id)} for topic in topics
+    ]
+    return templates.TemplateResponse(
+        request=request,
+        name="feed_day.html",
+        context=_context(db, request, day=report_day, sections=sections),
     )
 
 

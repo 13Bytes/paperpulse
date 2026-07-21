@@ -1,0 +1,45 @@
+.archive-month {
+  margin-top: 2.5rem;
+}
+
+.feed-dates {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 0.65rem;
+  padding: 0;
+  list-style: none;
+}
+
+.feed-dates a {
+  display: block;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card);
+  font-weight: 750;
+  text-decoration: none;
+}
+
+.feed-day {
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+.feed-topic {
+  padding: 2rem 0;
+  border-top: 1px solid var(--line);
+}
+
+.feed-topic:first-of-type {
+  margin-top: 2rem;
+}
+
+.feed-topic > .prose {
+  max-width: 760px;
+  margin: 2rem auto 0;
+}
+
+.empty-note {
+  color: var(--muted);
+  font-style: italic;
+}

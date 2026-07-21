@@ -98,9 +98,11 @@ def test_daily_pipeline_is_per_topic_idempotent_and_skips_archived(
 ):
     with db_factory() as db:
         active = add_active_topic(db)
+        same_query = add_active_topic(db, "AI Engineering Mirror")
         archived = add_active_topic(db, "Archived topic")
         archived.status = "archived"
         db.commit()
+        active_ids = {active.id, same_query.id}
 
     class FakeArxiv:
         queries = []
@@ -130,15 +132,17 @@ def test_daily_pipeline_is_per_topic_idempotent_and_skips_archived(
     first = run_daily(now=now, session_factory=db_factory)
     second = run_daily(now=now, session_factory=db_factory)
 
-    assert first.succeeded == 1 and first.failed == 0
-    assert second.skipped == 1
+    assert first.succeeded == 2 and first.failed == 0
+    assert second.skipped == 2
+    # Matching topic queries share the proven upstream one-fetch-per-input behavior.
     assert len(FakeArxiv.queries) == 1
     assert "cat:cs.AI+OR+cat:cs.RO" in FakeArxiv.queries[0]
     assert "+AND+" in FakeArxiv.queries[0]
     with db_factory() as db:
         reports = list(db.scalars(select(Report)))
-        assert len(reports) == 1 and reports[0].topic_id == active.id
-        assert reports[0].period_start == date(2026, 7, 9)
+        assert len(reports) == 2
+        assert {report.topic_id for report in reports} == active_ids
+        assert {report.period_start for report in reports} == {date(2026, 7, 9)}
 
 
 def test_weekly_pipeline_uses_previous_monday_to_sunday(monkeypatch, db_factory):

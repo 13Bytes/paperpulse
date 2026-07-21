@@ -80,7 +80,7 @@ class ArxivClient:
 
         while True:
             url = (
-                "http://export.arxiv.org/api/query?"
+                "https://export.arxiv.org/api/query?"
                 f"search_query={self.search_query}"
                 f"&sortBy={self.sort_by}"
                 f"&sortOrder={self.sort_order}"
@@ -96,22 +96,8 @@ class ArxivClient:
                         root = ET.fromstring(data)
 
                         if len(root.findall(f"{ATOM_NS}entry")) == 0:
-                            retry_count += 1
-                            if retry_count == max_retries:
-                                logger.warning(
-                                    "No data in returned XML after %d attempts",
-                                    max_retries,
-                                )
-                                xml_str = ET.tostring(root, encoding="unicode", method="xml")
-                                logger.debug("Full XML response: %s", xml_str)
-                                return papers
-                            logger.info(
-                                "No data in returned XML, attempt %d of %d",
-                                retry_count,
-                                max_retries,
-                            )
-                            self.sleep(10)
-                            continue
+                            logger.info("ArXiv returned no matching papers; stopping retrieval")
+                            return papers
 
                         break
                 except urllib.error.HTTPError as e:
@@ -231,7 +217,7 @@ class ArxivClient:
         arxiv_id = match.group(1)
 
         # 2. Construct the API query URL
-        api_url = f"http://export.arxiv.org/api/query?id_list={arxiv_id}"
+        api_url = f"https://export.arxiv.org/api/query?id_list={arxiv_id}"
 
         try:
             # 3. Call the API and get the Atom feed

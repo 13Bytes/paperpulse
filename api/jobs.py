@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 
 from api.auth import cleanup_expired_auth
 from api.database import SessionLocal, assert_schema_current
+from api.logging_config import configure_logging
 from api.pipeline import run_daily, run_weekly
 
 
@@ -14,6 +15,7 @@ def main() -> int:
     parser.add_argument("job", choices=["daily", "weekly", "cleanup"])
     args = parser.parse_args()
     load_dotenv()
+    configure_logging()
     assert_schema_current()
     if args.job == "cleanup":
         with SessionLocal() as db:

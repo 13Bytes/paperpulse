@@ -10,6 +10,7 @@ services:
       PROJECT_ENV: dev
       PROJECT_DIR: /app
       DATABASE_URL: sqlite:///data/paperpulse.db
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LLM_BACKEND: ${LLM_BACKEND:-codex_cli}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}

@@ -372,6 +372,85 @@ def test_anonymous_subscriptions_merge_on_login_and_filter_archived_topics(
     assert "Archived Robotics" not in topics.text
 
 
+def test_anonymous_feed_archive_groups_days_and_isolates_selected_topics(
+    http_client, db_factory
+):
+    with db_factory() as db:
+        selected = _active_topic(db, "Selected Vision")
+        selected_without_report = _active_topic(db, "Selected Robotics")
+        unselected = _active_topic(db, "Private Mathematics")
+        db.flush()
+        db.add_all(
+            [
+                Report(
+                    topic_id=selected.id,
+                    kind="daily",
+                    title="Selected July report",
+                    period_start=date(2026, 7, 20),
+                    period_end=date(2026, 7, 20),
+                    content_markdown="## Selected daily content",
+                    num_papers=4,
+                ),
+                Report(
+                    topic_id=selected.id,
+                    kind="daily",
+                    title="Selected June report",
+                    period_start=date(2026, 6, 30),
+                    period_end=date(2026, 6, 30),
+                    content_markdown="## Earlier selected content",
+                ),
+                Report(
+                    topic_id=unselected.id,
+                    kind="daily",
+                    title="Unselected secret report",
+                    period_start=date(2026, 7, 20),
+                    period_end=date(2026, 7, 20),
+                    content_markdown="## Must not leak",
+                ),
+            ]
+        )
+        db.commit()
+        selected_ids = [str(selected.id), str(selected_without_report.id)]
+
+    response = http_client.post(
+        "/subscriptions",
+        data={"csrf_token": _csrf(http_client), "topic_ids": selected_ids},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+    archive = http_client.get("/feed")
+    assert archive.status_code == 200
+    assert "July 2026" in archive.text and "June 2026" in archive.text
+    assert "/feed/2026-07-20" in archive.text
+
+    day = http_client.get("/feed/2026-07-20")
+    assert day.status_code == 200
+    assert "Selected daily content" in day.text
+    assert "Selected Robotics" in day.text
+    assert "No report was published for this topic" in day.text
+    assert "Private Mathematics" not in day.text
+    assert "Must not leak" not in day.text
+
+
+@pytest.mark.parametrize("day", ["not-a-date", "2026-07-19"])
+def test_feed_day_redirects_when_date_is_invalid_or_unavailable(
+    day, http_client, db_factory
+):
+    with db_factory() as db:
+        topic = _active_topic(db, "Archive Validation")
+        db.commit()
+        topic_id = topic.id
+    http_client.post(
+        "/subscriptions",
+        data={"csrf_token": _csrf(http_client), "topic_ids": str(topic_id)},
+    )
+
+    response = http_client.get(f"/feed/{day}", follow_redirects=False)
+    assert response.status_code == 302
+    assert response.headers["location"] == "/feed"
+
+
 def test_account_only_shows_the_signed_in_users_proposals(http_client, db_factory):
     with db_factory() as db:
         owner = User(email="owner@example.com")

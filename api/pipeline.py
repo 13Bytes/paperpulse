@@ -171,6 +171,7 @@ def run_daily(
     base_config = load_config()
     settings = load_app_settings()
     counts = {"succeeded": 0, "skipped": 0, "failed": 0}
+    papers_by_query = {}
     with session_factory() as db:
         topic_query = select(Topic.id).where(Topic.status == "active")
         if topic_ids is not None:
@@ -183,6 +184,10 @@ def run_daily(
             topic = db.scalar(
                 select(Topic).options(selectinload(Topic.terms)).where(Topic.id == topic_id)
             )
+            if not topic or topic.status != "active":
+                logger.info("Skipped topic %s because it is no longer active", topic_id)
+                counts["skipped"] += 1
+                continue
             existing = db.scalar(
                 select(Report.id).where(
                     Report.topic_id == topic_id,
@@ -201,8 +206,12 @@ def run_daily(
             try:
                 config = topic_config(topic, base_config)
                 query = build_arxiv_query(config)
-                client = ArxivClient(query, ARXIV_SORT_BY, ARXIV_SORT_ORDER)
-                papers = client.retrieve_daily_results(now=now)
+                if query not in papers_by_query:
+                    client = ArxivClient(query, ARXIV_SORT_BY, ARXIV_SORT_ORDER)
+                    papers_by_query[query] = client.retrieve_daily_results(now=now)
+                else:
+                    logger.info("Reusing retrieved papers for topic %s", topic_id)
+                papers = list(papers_by_query[query])
                 if not papers:
                     _finish(db, claim, "skipped", "No matching papers")
                     db.commit()
@@ -259,6 +268,10 @@ def run_weekly(*, as_of: date | None = None, session_factory=SessionLocal) -> Ba
             topic = db.scalar(
                 select(Topic).options(selectinload(Topic.terms)).where(Topic.id == topic_id)
             )
+            if not topic or topic.status != "active":
+                logger.info("Skipped topic %s because it is no longer active", topic_id)
+                counts["skipped"] += 1
+                continue
             existing = db.scalar(
                 select(Report.id).where(
                     Report.topic_id == topic_id,

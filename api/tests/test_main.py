@@ -244,6 +244,21 @@ class TestArxivClient:
         assert client.retrieve_daily_results(max_retries=2) == []
         assert sleeps == [5]
 
+    def test_retrieve_daily_results_treats_empty_feed_as_a_successful_no_op(self):
+        calls = []
+        sleeps = []
+
+        def empty_feed(url):
+            calls.append(url)
+            return FakeResponse('<feed xmlns="http://www.w3.org/2005/Atom"></feed>')
+
+        client = ArxivClient(urlopen=empty_feed, sleep=sleeps.append)
+
+        assert client.retrieve_daily_results() == []
+        assert len(calls) == 1
+        assert calls[0].startswith("https://export.arxiv.org/")
+        assert sleeps == []
+
     def test_retrieve_daily_results_handles_malformed_xml(self):
         client = ArxivClient(
             urlopen=lambda _url: FakeResponse("<feed>"),

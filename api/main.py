@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from dotenv import load_dotenv
 
+from api.logging_config import configure_logging
 from api.pipeline import run_daily
 
 
@@ -17,6 +18,7 @@ class PipelineResult:
 
 def main() -> PipelineResult:
     load_dotenv()
+    configure_logging()
     result = run_daily()
     return PipelineResult(
         ok=result.failed == 0,

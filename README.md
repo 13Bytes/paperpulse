@@ -15,11 +15,14 @@ but report generation now runs independently for every active topic.
 - Magic-link accounts for cross-browser synchronization
 - Explicit magic-link confirmation so mail scanners cannot consume sign-in links
 - Public topic catalog, topic archives, daily reports, and weekly reports
+- A personalized daily archive, grouped by month with combined per-day views
 - Moderated topic, ArXiv category, and keyword proposals
 - Administrator dashboard with curated topic creation and archiving
 - SQLite persistence with Alembic migrations, foreign keys, and WAL mode
 - Daily jobs at 06:00 UTC and Monday weekly jobs at 07:00 UTC
+- One ArXiv download per distinct topic query in each daily batch
 - Atomic job claims, stale-job recovery, and an administrator job history
+- Structured job progress in Docker and scheduler logs (`LOG_LEVEL` defaults to `INFO`)
 - One-time import of the existing `config.yaml` topic and Jekyll posts
 
 ## Local development
