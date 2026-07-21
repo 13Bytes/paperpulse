@@ -12,3 +12,7 @@ def configure_logging() -> None:
         level=level,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    # Uvicorn installs its own handlers before the application lifespan starts.
+    # Giving our namespace an explicit level ensures application INFO messages are
+    # not discarded even when Uvicorn leaves the root logger at WARNING.
+    logging.getLogger("api").setLevel(level)

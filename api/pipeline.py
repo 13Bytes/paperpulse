@@ -168,17 +168,28 @@ def run_daily(
     if now.tzinfo is None:
         now = now.replace(tzinfo=UTC)
     report_day = now.date() - timedelta(days=1)
+    requested_topic_ids = None if topic_ids is None else set(topic_ids)
+    logger.info(
+        "Starting daily report batch for %s (requested topics: %s)",
+        report_day,
+        "all active" if requested_topic_ids is None else sorted(requested_topic_ids),
+    )
     base_config = load_config()
     settings = load_app_settings()
     counts = {"succeeded": 0, "skipped": 0, "failed": 0}
     papers_by_query = {}
     with session_factory() as db:
         topic_query = select(Topic.id).where(Topic.status == "active")
-        if topic_ids is not None:
-            topic_query = topic_query.where(Topic.id.in_(set(topic_ids)))
+        if requested_topic_ids is not None:
+            topic_query = topic_query.where(Topic.id.in_(requested_topic_ids))
         topic_ids = list(
             db.scalars(topic_query.order_by(Topic.id))
         )
+    logger.info("Daily report batch selected %s active topic(s): %s", len(topic_ids), topic_ids)
+    if requested_topic_ids is not None:
+        unavailable = requested_topic_ids - set(topic_ids)
+        if unavailable:
+            logger.warning("Requested topic(s) are missing or inactive: %s", sorted(unavailable))
     for topic_id in topic_ids:
         with session_factory() as db:
             topic = db.scalar(
@@ -188,6 +199,12 @@ def run_daily(
                 logger.info("Skipped topic %s because it is no longer active", topic_id)
                 counts["skipped"] += 1
                 continue
+            logger.info(
+                "Processing daily report for topic %s (%s), report date %s",
+                topic.id,
+                topic.name,
+                report_day,
+            )
             existing = db.scalar(
                 select(Report.id).where(
                     Report.topic_id == topic_id,
@@ -197,6 +214,13 @@ def run_daily(
                 )
             )
             if existing:
+                logger.info(
+                    "Skipped topic %s (%s): daily report %s already exists for %s",
+                    topic.id,
+                    topic.name,
+                    existing,
+                    report_day,
+                )
                 counts["skipped"] += 1
                 continue
             claim = _claim_job(db, topic_id, "daily", report_day, report_day)
@@ -207,17 +231,33 @@ def run_daily(
                 config = topic_config(topic, base_config)
                 query = build_arxiv_query(config)
                 if query not in papers_by_query:
+                    logger.info(
+                        "Retrieving ArXiv papers for topic %s (%s)", topic.id, topic.name
+                    )
                     client = ArxivClient(query, ARXIV_SORT_BY, ARXIV_SORT_ORDER)
                     papers_by_query[query] = client.retrieve_daily_results(now=now)
                 else:
                     logger.info("Reusing retrieved papers for topic %s", topic_id)
                 papers = list(papers_by_query[query])
+                logger.info(
+                    "Retrieved %s matching ArXiv paper(s) for topic %s (%s)",
+                    len(papers),
+                    topic.id,
+                    topic.name,
+                )
                 if not papers:
                     _finish(db, claim, "skipped", "No matching papers")
                     db.commit()
                     counts["skipped"] += 1
                     continue
                 backend = create_summary_backend(config, settings)
+                logger.info(
+                    "Summarizing %s paper(s) for topic %s (%s) with %s",
+                    len(papers),
+                    topic.id,
+                    topic.name,
+                    type(backend).__name__,
+                )
                 content = backend.identify_important_papers(papers)
                 if not content.strip():
                     raise RuntimeError("Summary backend returned an empty report")
@@ -249,7 +289,15 @@ def run_daily(
                 except LostJobClaim:
                     db.rollback()
                 counts["failed"] += 1
-    return BatchResult(**counts)
+    result = BatchResult(**counts)
+    logger.info(
+        "Finished daily report batch for %s: %s succeeded, %s skipped, %s failed",
+        report_day,
+        result.succeeded,
+        result.skipped,
+        result.failed,
+    )
+    return result
 
 
 def run_weekly(*, as_of: date | None = None, session_factory=SessionLocal) -> BatchResult:

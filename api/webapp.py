@@ -1,9 +1,11 @@
 """Server-rendered multi-user Paperpulse web application."""
 
+import logging
 import secrets
 from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path
+from uuid import uuid4
 
 import bleach
 import markdown
@@ -35,6 +37,7 @@ from api.db_models import (
     TopicTerm,
     User,
 )
+from api.logging_config import configure_logging
 from api.pipeline import run_daily
 from api.settings import load_app_settings, load_config
 from api.topic_service import (
@@ -47,6 +50,7 @@ from api.topic_service import (
 )
 
 ROOT = Path(__file__).resolve().parent
+logger = logging.getLogger(__name__)
 templates = Jinja2Templates(directory=ROOT / "templates")
 settings = load_app_settings()
 selection_signer = URLSafeSerializer(settings.session_secret, salt="paperpulse-selections")
@@ -90,8 +94,14 @@ templates.env.filters["render_markdown"] = _markdown
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    configure_logging()
+    logger.info("Starting Paperpulse web application")
     assert_schema_current()
-    yield
+    logger.info("Database schema is current; web application is ready")
+    try:
+        yield
+    finally:
+        logger.info("Stopping Paperpulse web application")
 
 
 app = FastAPI(title="Paperpulse", lifespan=lifespan)
@@ -137,6 +147,34 @@ def _require_admin(db: Session, request: Request) -> User:
     if user.email not in settings.admin_emails:
         raise HTTPException(403, "Administrator access required")
     return user
+
+
+def _run_daily_from_admin(topic_id: int, trigger_id: str, admin_email: str) -> None:
+    """Run a manual report with logs that tie it back to the HTTP request."""
+    logger.info(
+        "Manual report trigger %s started in background for topic %s (admin=%s)",
+        trigger_id,
+        topic_id,
+        admin_email,
+    )
+    try:
+        result = run_daily(topic_ids=(topic_id,))
+        logger.info(
+            "Manual report trigger %s finished for topic %s: "
+            "%s succeeded, %s skipped, %s failed",
+            trigger_id,
+            topic_id,
+            result.succeeded,
+            result.skipped,
+            result.failed,
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "Manual report trigger %s crashed while running for topic %s",
+            trigger_id,
+            topic_id,
+        )
+        return
 
 
 def _selected_cookie(request: Request) -> set[int]:
@@ -869,13 +907,32 @@ def admin_generate_report(
     db: Session = Depends(get_db),
 ):
     _check_csrf(request, csrf_token)
-    _require_admin(db, request)
-    topic = db.scalar(
-        select(Topic.id).where(Topic.id == topic_id, Topic.status == "active")
-    )
+    admin = _require_admin(db, request)
+    topic = db.execute(
+        select(Topic.id, Topic.name).where(Topic.id == topic_id, Topic.status == "active")
+    ).one_or_none()
     if topic is None:
+        logger.warning(
+            "Admin %s tried to generate a report for missing or inactive topic %s",
+            admin.email,
+            topic_id,
+        )
         raise HTTPException(404)
-    background_tasks.add_task(run_daily, topic_ids=(topic_id,))
+    trigger_id = uuid4().hex[:8]
+    logger.info(
+        "Accepted manual report trigger %s for topic %s (%s) from admin %s; "
+        "returning HTTP 303 and scheduling background work",
+        trigger_id,
+        topic.id,
+        topic.name,
+        admin.email,
+    )
+    background_tasks.add_task(
+        _run_daily_from_admin,
+        topic_id=topic.id,
+        trigger_id=trigger_id,
+        admin_email=admin.email,
+    )
     return RedirectResponse("/admin", status_code=303)
 
 
