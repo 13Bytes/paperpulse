@@ -5,10 +5,10 @@ fastapi>=0.111.0
 uvicorn[standard]>=0.29.0
 SQLAlchemy>=2.0.30
 alembic>=1.13.1
-Jinja2>=3.1.4
-python-multipart>=0.0.9
+Jinja2>=3.1.6
+python-multipart>=0.0.30
 Markdown>=3.6
-bleach>=6.1.0
+nh3>=0.2.18
 itsdangerous>=2.2.0
 
 # PDF tools (not needed for the daily cron flow)

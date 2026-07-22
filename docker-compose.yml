@@ -71,6 +71,9 @@ services:
       - ./config.yaml:/app/config.yaml:ro
       - codex-home:/app/.codex
     environment: *paperpulse-env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     profiles: [jobs]
 
 volumes:

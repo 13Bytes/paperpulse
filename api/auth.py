@@ -74,7 +74,11 @@ def issue_magic_link(db: Session, email: str, ip: str | None) -> tuple[MagicLink
 
 
 def consume_magic_link(db: Session, token: str, settings: AppSettings) -> User | None:
-    link = db.scalar(select(MagicLink).where(MagicLink.token_hash == hash_token(token)))
+    link = db.scalar(
+        select(MagicLink)
+        .where(MagicLink.token_hash == hash_token(token))
+        .with_for_update()
+    )
     if not link or link.used_at or link.expires_at <= utcnow():
         return None
     link.used_at = utcnow()

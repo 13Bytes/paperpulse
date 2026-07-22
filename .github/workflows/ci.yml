@@ -6,6 +6,9 @@ on:
     branches:
       - "**"
 
+permissions:
+  contents: read
+
 jobs:
   python:
     name: Python

@@ -111,6 +111,7 @@ def test_load_app_settings_codex_backend(monkeypatch, tmp_path):
     monkeypatch.setenv("CODEX_MODEL", "gpt-5")
     monkeypatch.setenv("CODEX_TIMEOUT_SECONDS", "123")
     monkeypatch.setenv("SESSION_SECRET", "test-production-secret")
+    monkeypatch.delenv("SESSION_COOKIE_SECURE", raising=False)
 
     settings = load_app_settings()
 
@@ -120,6 +121,16 @@ def test_load_app_settings_codex_backend(monkeypatch, tmp_path):
     assert settings.codex_home == codex_home
     assert settings.codex_model == "gpt-5"
     assert settings.codex_timeout_seconds == 123
+    assert settings.session_cookie_secure is True
+
+
+def test_load_app_settings_allows_explicit_insecure_cookie_override(monkeypatch, tmp_path):
+    monkeypatch.setenv("PROJECT_DIR", str(tmp_path))
+    monkeypatch.setenv("PROJECT_ENV", "prod")
+    monkeypatch.setenv("SESSION_SECRET", "test-production-secret")
+    monkeypatch.setenv("SESSION_COOKIE_SECURE", "false")
+
+    assert load_app_settings().session_cookie_secure is False
 
 
 def test_load_app_settings_rejects_invalid_backend(monkeypatch):
@@ -397,6 +408,25 @@ class TestPaperpulseAgent:
         with pytest.raises(ValueError, match="No papers"):
             llm_agent.identify_important_papers([])
 
+    def test_summarize_weekly_rejects_empty_input(self, fake_agents_sdk):
+        llm_agent = PaperpulseAgent({}, model="test-model")
+
+        with pytest.raises(ValueError, match="No daily reports"):
+            llm_agent.summarize_weekly([])
+
+    def test_summarize_weekly_joins_daily_reports(self, fake_agents_sdk):
+        llm_agent = PaperpulseAgent({}, model="test-model")
+
+        result = llm_agent.summarize_weekly(["Monday report", "Tuesday report"])
+
+        assert result == "summary for Weekly Research Summariser"
+        assert FakeRunner.calls == [
+            (
+                "Weekly Research Summariser",
+                "Monday report\n\n--- DAILY REPORT ---\n\nTuesday report",
+            )
+        ]
+
 
 def make_codex_settings(tmp_path, **overrides):
     codex_home = tmp_path / ".codex"
@@ -453,6 +483,29 @@ class TestCodexCliAgent:
 
         with pytest.raises(ValueError, match="No papers"):
             llm_agent.identify_important_papers([])
+
+    def test_summarize_weekly_rejects_empty_input(self, tmp_path):
+        llm_agent = CodexCliAgent({}, make_codex_settings(tmp_path))
+
+        with pytest.raises(ValueError, match="No daily reports"):
+            llm_agent.summarize_weekly([])
+
+    def test_summarize_weekly_builds_joined_prompt(self, monkeypatch, tmp_path):
+        llm_agent = CodexCliAgent({}, make_codex_settings(tmp_path))
+        prompts = []
+        monkeypatch.setattr(
+            llm_agent,
+            "_run_codex",
+            lambda prompt: prompts.append(prompt) or "weekly summary",
+        )
+
+        result = llm_agent.summarize_weekly(["Monday report", "Tuesday report"])
+
+        assert result == "weekly summary"
+        assert "Create a coherent weekly report" in prompts[0]
+        assert prompts[0].endswith(
+            "Monday report\n\n--- DAILY REPORT ---\n\nTuesday report"
+        )
 
     def test_run_codex_fails_when_codex_home_is_missing(self, tmp_path):
         missing_home = tmp_path / "missing"

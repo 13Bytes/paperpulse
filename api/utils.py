@@ -1,6 +1,7 @@
 import base64
 import io
 import logging
+import re
 import tempfile
 import urllib
 import urllib.error
@@ -99,8 +100,6 @@ def normalize_text(text):
     """
     Normalize text by removing punctuation, extra spaces, and converting to lowercase
     """
-    import re
-
     # Convert to lowercase and replace newlines with spaces
     text = text.lower().replace("\n", " ")
     # Remove punctuation except hyphens between words

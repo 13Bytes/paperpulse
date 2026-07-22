@@ -9,9 +9,9 @@ from itsdangerous import URLSafeSerializer
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload, sessionmaker
 
-from api.auth import create_auth_session
+from api.auth import create_auth_session, issue_magic_link
 from api.database import create_db_engine, create_schema, get_db
-from api.db_models import Report, Subscription, Topic, TopicTerm, User
+from api.db_models import MagicLink, Report, Subscription, Topic, TopicTerm, User
 from api.settings import AppSettings
 from api.topic_service import create_topic, propose_terms
 from api.webapp import app
@@ -316,6 +316,7 @@ def test_account_deletion_removes_identity_and_anonymizes_proposals(http_client,
             keywords=["privacy testing"],
             creator=user,
         )
+        issue_magic_link(db, user.email, "127.0.0.1")
         _auth, raw_token = create_auth_session(db, user)
         db.commit()
         user_id, topic_id = user.id, topic.id
@@ -332,6 +333,27 @@ def test_account_deletion_removes_identity_and_anonymizes_proposals(http_client,
     with db_factory() as db:
         assert db.get(User, user_id) is None
         assert db.get(Topic, topic_id).created_by_id is None
+        assert db.scalar(
+            select(MagicLink).where(MagicLink.email == "delete-me@example.com")
+        ) is None
+
+
+def test_site_config_is_cached(monkeypatch):
+    import api.webapp as webapp
+
+    calls = []
+    monkeypatch.setattr(
+        webapp,
+        "load_config",
+        lambda: calls.append(None) or {"blog": {"title": "Cached title"}},
+    )
+    webapp._site_config.cache_clear()
+    try:
+        assert webapp._site_config() == {"title": "Cached title"}
+        assert webapp._site_config() == {"title": "Cached title"}
+        assert len(calls) == 1
+    finally:
+        webapp._site_config.cache_clear()
 
 
 def test_anonymous_subscriptions_merge_on_login_and_filter_archived_topics(

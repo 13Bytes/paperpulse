@@ -95,7 +95,9 @@ def load_app_settings() -> AppSettings:
         database_url=os.getenv("DATABASE_URL", "sqlite:///data/paperpulse.db"),
         public_base_url=os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/"),
         session_secret=session_secret,
-        session_cookie_secure=parse_bool(os.getenv("SESSION_COOKIE_SECURE")),
+        session_cookie_secure=parse_bool(
+            os.getenv("SESSION_COOKIE_SECURE", "true" if project_env == "prod" else "false")
+        ),
         admin_emails=admin_emails,
         smtp_host=(os.getenv("SMTP_HOST") or "").strip() or None,
         smtp_port=smtp_port,

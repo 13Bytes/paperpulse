@@ -4,11 +4,12 @@ import logging
 import secrets
 from contextlib import asynccontextmanager
 from datetime import date
+from functools import cache
 from pathlib import Path
 from uuid import uuid4
 
-import bleach
 import markdown
+import nh3
 from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -31,6 +32,7 @@ from api.db_models import (
     AuthSession,
     JobRun,
     LegacyRedirect,
+    MagicLink,
     Report,
     Subscription,
     Topic,
@@ -58,7 +60,7 @@ selection_signer = URLSafeSerializer(settings.session_secret, salt="paperpulse-s
 
 def _markdown(value: str) -> str:
     rendered = markdown.markdown(value, extensions=["extra", "sane_lists"])
-    return bleach.clean(
+    return nh3.clean(
         rendered,
         tags={
             "p",
@@ -84,8 +86,9 @@ def _markdown(value: str) -> str:
             "th",
             "td",
         },
-        attributes={"a": ["href", "title", "target", "rel"]},
-        protocols={"http", "https"},
+        attributes={"a": {"href", "title", "target", "rel"}},
+        url_schemes={"http", "https"},
+        link_rel=None,
     )
 
 
@@ -209,15 +212,19 @@ def _set_selection_cookie(response, topic_ids: set[int]) -> None:  # noqa: ANN00
     )
 
 
+@cache
+def _site_config() -> dict:
+    return load_config().get("blog", {})
+
+
 def _context(db: Session, request: Request, **values) -> dict:  # noqa: ANN003
     auth = _auth(db, request)
-    config = load_config()
     return {
         "request": request,
         "user": auth.user if auth else None,
         "is_admin": bool(auth and auth.user.email in settings.admin_emails),
         "csrf_token": request.state.csrf_token,
-        "site": config.get("blog", {}),
+        "site": _site_config(),
         **values,
     }
 
@@ -702,6 +709,7 @@ def delete_account(
     user = _require_user(db, request)
     if confirmation.strip().casefold() != "delete":
         raise HTTPException(400, "Type DELETE to confirm account deletion")
+    db.execute(delete(MagicLink).where(MagicLink.email == user.email))
     db.delete(user)
     db.commit()
     response = RedirectResponse("/", status_code=303)
