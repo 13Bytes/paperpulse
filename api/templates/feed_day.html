@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Your feed · {{ day }} · {{ site.title or 'Paperpulse' }}{% endblock %}
+{% block content %}
+<section class="feed-day">
+  <p><a href="/feed">← All days</a></p>
+  <p class="eyebrow">Personalized daily feed</p>
+  <h1>{{ day.strftime('%B %d, %Y') }}</h1>
+  {% for section in sections %}
+    <article class="feed-topic">
+      <h2><a href="/topics/{{ section.topic.slug }}">{{ section.topic.name }}</a></h2>
+      {% if section.report %}
+        <p class="muted">{{ section.report.num_papers }} papers · <a href="/reports/{{ section.report.id }}">Open standalone report</a></p>
+        <div class="prose">{{ section.report.content_markdown | render_markdown | safe }}</div>
+      {% else %}
+        <p class="empty-note">No report was published for this topic on this day.</p>
+      {% endif %}
+    </article>
+  {% endfor %}
+</section>
+{% endblock %}

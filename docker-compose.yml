@@ -1,69 +1,77 @@
 services:
-  blog:
-    image: jekyll/jekyll:4
-    ports:
-      - "4000:4000"
-    volumes:
-      - ./blog:/srv/jekyll
-      - ./config.yaml:/srv/jekyll/_data/paperpulse.yml:ro
-    environment:
-      - JEKYLL_ENV=development
-      - MIXPANEL_TOKEN=${MIXPANEL_TOKEN}
-    command: jekyll serve --livereload
-
-  # Persistent API server (dev) ─────────────────────────────────────────────
-  # Starts alongside the blog on `docker compose up`.
-  # Exposes port 8000 for the manual trigger button in the blog UI.
-  # Paper results are cached under ./data so repeated triggers don't
-  # re-fetch ArXiv (PROJECT_ENV=dev activates the cache in main.py).
-  api:
-    build:
-      context: .
-      dockerfile: api/Dockerfile
-    ports:
-      - "8000:8000"
-    volumes:
-      - ./blog/_posts:/app/blog/_posts  # write posts into the Jekyll tree
-      - ./data:/app/data                 # pickle cache for dev mode
-      - codex-home:/app/.codex           # persisted Codex CLI auth/state
-      - ./.env:/app/.env:ro
-      - ./config.yaml:/app/config.yaml:ro
-    environment:
-      - PROJECT_ENV=${PROJECT_ENV:-dev}
-      - PROJECT_DIR=/app
-      - LLM_BACKEND=${LLM_BACKEND:-openai_api}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
-      - CODEX_HOME=/app/.codex
-      - CODEX_MODEL=${CODEX_MODEL:-}
-      - CODEX_TIMEOUT_SECONDS=${CODEX_TIMEOUT_SECONDS:-900}
-      - MANUAL_TRIGGERS_ALLOWED=true
-    command: uvicorn api.server:app --host 0.0.0.0 --port 8000 --reload
-
-  # One-shot runner ──────────────────────────────────────────────────────────
-  # Use when you want to invoke the pipeline directly without the HTTP server:
-  #   docker compose run --rm api-run
-  api-run:
+  migrate:
     build:
       context: .
       dockerfile: api/Dockerfile
     volumes:
-      - ./blog/_posts:/app/blog/_posts
       - ./data:/app/data
-      - codex-home:/app/.codex
-      - ./.env:/app/.env:ro
       - ./config.yaml:/app/config.yaml:ro
-    environment:
-      - PROJECT_ENV=${PROJECT_ENV:-dev}
-      - PROJECT_DIR=/app
-      - LLM_BACKEND=${LLM_BACKEND:-openai_api}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
-      - CODEX_HOME=/app/.codex
-      - CODEX_MODEL=${CODEX_MODEL:-}
-      - CODEX_TIMEOUT_SECONDS=${CODEX_TIMEOUT_SECONDS:-900}
-    profiles:
-      - run
+    environment: &paperpulse-env
+      PROJECT_ENV: dev
+      PROJECT_DIR: /app
+      DATABASE_URL: sqlite:///data/paperpulse.db
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LLM_BACKEND: ${LLM_BACKEND:-codex_cli}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      CODEX_HOME: /app/.codex
+      CODEX_MODEL: ${CODEX_MODEL:-}
+      CODEX_TIMEOUT_SECONDS: ${CODEX_TIMEOUT_SECONDS:-900}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:4000}
+      SESSION_SECRET: ${SESSION_SECRET:-dev-only-change-me}
+      SESSION_COOKIE_SECURE: "false"
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-paperpulse@localhost}
+      SMTP_STARTTLS: ${SMTP_STARTTLS:-true}
+      MAGIC_LINK_DEBUG: ${MAGIC_LINK_DEBUG:-true}
+    command: alembic upgrade head
+
+  web:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    ports:
+      - "4000:8000"
+    volumes:
+      - ./api:/app/api
+      - ./data:/app/data
+      - ./config.yaml:/app/config.yaml:ro
+      - codex-home:/app/.codex
+    environment: *paperpulse-env
+    command: uvicorn api.server:app --host 0.0.0.0 --port 8000 --reload
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    volumes:
+      - ./data:/app/data
+      - ./config.yaml:/app/config.yaml:ro
+      - codex-home:/app/.codex
+    environment: *paperpulse-env
+    command: supercronic /app/api/crontab
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    profiles: [scheduler]
+
+  jobs:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    volumes:
+      - ./data:/app/data
+      - ./config.yaml:/app/config.yaml:ro
+      - codex-home:/app/.codex
+    environment: *paperpulse-env
+    profiles: [jobs]
 
 volumes:
   codex-home:

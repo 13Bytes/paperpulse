@@ -22,6 +22,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# Default: run the summariser once (useful for one-shot / dev invocations).
-# Override CMD in docker-compose to use supercronic for scheduled runs.
-CMD ["python", "-m", "api.main"]
+EXPOSE 8000
+CMD ["uvicorn", "api.server:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -1,7 +1,7 @@
 [project]
 name = "paperpulse"
 version = "0.1.0"
-description = "Daily ArXiv research summariser that publishes Jekyll blog posts."
+description = "Multi-user ArXiv topic reports with daily and weekly AI summaries."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }

@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}{{ report.title }} · Paperpulse{% endblock %}
+{% block content %}
+<article class="report-page">
+  <p><a href="/topics/{{ report.topic.slug }}">{{ report.topic.name }}</a> · <span class="pill">{{ report.kind }}</span></p>
+  <h1>{{ report.title }}</h1>
+  <p class="muted">{{ report.period_start }} – {{ report.period_end }}{% if report.num_papers %} · {{ report.num_papers }} ArXiv papers{% endif %}</p>
+  <div class="prose">{{ report.content_markdown | render_markdown | safe }}</div>
+</article>
+{% endblock %}

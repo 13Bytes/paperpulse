@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero">
+  <p class="eyebrow">Research without boundaries</p>
+  <h1>{{ site.tagline or 'Research reports tailored to your interests' }}</h1>
+  <p>{{ site.description }}</p>
+</section>
+{% if not selected %}
+<section class="panel onboarding">
+  <h2>Whatever your field, start with what interests you</h2>
+  <p>Your selection stays in this browser. Sign in later to sync it elsewhere.</p>
+  <form action="/subscriptions" method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="topic-grid">
+    {% for topic in topics %}
+      <label class="topic-choice"><input type="checkbox" name="topic_ids" value="{{ topic.id }}"><span><strong>{{ topic.name }}</strong><small>{{ topic.description }}</small></span></label>
+    {% else %}<p>No topics are active yet.</p>{% endfor %}
+    </div>
+    {% if topics %}<button type="submit">Build my feed</button>{% endif %}
+  </form>
+</section>
+{% else %}
+<div class="section-heading"><h2>Your reports</h2><span><a href="/feed">Browse archive</a> · <a href="/topics">Manage topics</a></span></div>
+<section class="report-list">
+  {% for report in reports %}
+  <article class="report-card">
+    <div><span class="pill">{{ report.kind }}</span><span class="muted">{{ report.topic.name }}</span></div>
+    <h3><a href="/reports/{{ report.id }}">{{ report.title }}</a></h3>
+    <p>{{ report.period_start }} – {{ report.period_end }}{% if report.num_papers %} · {{ report.num_papers }} papers{% endif %}</p>
+  </article>
+  {% else %}<div class="empty"><h3>No reports yet</h3><p>Your selected topics will appear here after their next scheduled run.</p></div>{% endfor %}
+</section>
+{% endif %}
+{% endblock %}

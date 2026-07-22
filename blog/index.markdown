@@ -3,6 +3,6 @@
 # To modify the layout, see https://jekyllrb.com/docs/themes/#overriding-theme-defaults
 
 layout: home
-subtitle: "Daily Pulse of AI-Driven Engineering Research on ArXiv"
-description: "Daily summaries of agentic systems, AI-aided design, robotics, digital twins, and engineering automation research."
+subtitle: "Your Daily Pulse of Research Across Every Field"
+description: "Clear, timely ArXiv summaries for researchers in every discipline. Follow the topics that matter to you and discover connections across fields."
 ---

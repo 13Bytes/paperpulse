@@ -1,0 +1,5 @@
+{% extends "base.html" %}
+{% block title %}Propose a topic · Paperpulse{% endblock %}
+{% block content %}<section class="narrow"><p class="eyebrow">Community proposal</p><h1>Propose a topic</h1><p>An administrator will review the topic and its initial search terms before it becomes public.</p>
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+{% set v = values or {} %}<form class="panel" action="/topics/propose" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>Name<input name="name" required value="{{ v.name or '' }}"></label><label>Description<textarea name="description" required>{{ v.description or '' }}</textarea></label><label>ArXiv categories<textarea name="categories" required placeholder="cs.AI, cs.RO">{{ v.categories or '' }}</textarea></label><label>Keywords<textarea name="keywords" required placeholder="One per line or comma-separated">{{ v.keywords or '' }}</textarea></label><button>Submit proposal</button></form></section>{% endblock %}

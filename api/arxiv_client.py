@@ -12,15 +12,15 @@ from api.models import Paper
 logger = logging.getLogger(__name__)
 
 
-ATOM_NS = '{http://www.w3.org/2005/Atom}'
+ATOM_NS = "{http://www.w3.org/2005/Atom}"
 
 
 class ArxivClient:
     def __init__(
         self,
-        search_query='cat:cs.AI',
-        sort_by='lastUpdatedDate',
-        sort_order='descending',
+        search_query="cat:cs.AI",
+        sort_by="lastUpdatedDate",
+        sort_order="descending",
         urlopen: Callable = libreq.urlopen,
         sleep: Callable[[float], None] = time.sleep,
     ):
@@ -34,19 +34,19 @@ class ArxivClient:
         """
         Parses the data retrieved by the ArXiV API call, extracts information, and populates a dict
 
-        Args:   
+        Args:
             entry: an XML string
 
         Returns:
             dict: containing the parsed values
         """
-        title = entry.findtext(f'{ATOM_NS}title', default='').strip()
-        summary = entry.findtext(f'{ATOM_NS}summary', default='').strip()
-        url = entry.findtext(f'{ATOM_NS}id', default='').strip()
+        title = entry.findtext(f"{ATOM_NS}title", default="").strip()
+        summary = entry.findtext(f"{ATOM_NS}summary", default="").strip()
+        url = entry.findtext(f"{ATOM_NS}id", default="").strip()
         authors = [
             name.text.strip()
-            for author in entry.findall(f'{ATOM_NS}author')
-            if (name := author.find(f'{ATOM_NS}name')) is not None and name.text
+            for author in entry.findall(f"{ATOM_NS}author")
+            if (name := author.find(f"{ATOM_NS}name")) is not None and name.text
         ]
         return Paper(title=title, authors=authors, summary=summary, url=url)
 
@@ -56,11 +56,16 @@ class ArxivClient:
         max_retries: int = 5,
         result_limit: int = 1200,
         now: datetime | None = None,
+        window_start: datetime | None = None,
+        window_end: datetime | None = None,
     ) -> list[Paper]:
         """
-        Retrieve papers updated within the previous 24 hours.
-        Results are fetched in descending update order until the first entry at
-        or before the cutoff is encountered.
+        Retrieve papers updated within ``[window_start, window_end)``.
+
+        Results are fetched in descending update order. Entries newer than the
+        window are skipped and retrieval stops once an entry predates it. When
+        no explicit window is supplied, retain the legacy rolling 24-hour range
+        ending at ``now`` for callers outside the scheduled pipeline.
 
         Args:
             None
@@ -70,17 +75,28 @@ class ArxivClient:
         """
         papers = []
         desired_timezone = UTC
-        now = now or datetime.now(desired_timezone)
-        if now.tzinfo is None:
-            now = now.replace(tzinfo=desired_timezone)
-        one_day_ago = now.astimezone(desired_timezone) - timedelta(days=1)
-        logger.info("Retrieving papers updated after %s", one_day_ago)
+        if (window_start is None) != (window_end is None):
+            raise ValueError("window_start and window_end must be supplied together")
+        if window_start is None:
+            window_end = now or datetime.now(desired_timezone)
+            if window_end.tzinfo is None:
+                window_end = window_end.replace(tzinfo=desired_timezone)
+            window_start = window_end - timedelta(days=1)
+        if window_start.tzinfo is None:
+            window_start = window_start.replace(tzinfo=desired_timezone)
+        if window_end.tzinfo is None:
+            window_end = window_end.replace(tzinfo=desired_timezone)
+        window_start = window_start.astimezone(desired_timezone)
+        window_end = window_end.astimezone(desired_timezone)
+        if window_start >= window_end:
+            raise ValueError("window_start must be before window_end")
+        logger.info("Retrieving papers updated from %s until %s", window_start, window_end)
 
         start = 0
 
         while True:
             url = (
-                "http://export.arxiv.org/api/query?"
+                "https://export.arxiv.org/api/query?"
                 f"search_query={self.search_query}"
                 f"&sortBy={self.sort_by}"
                 f"&sortOrder={self.sort_order}"
@@ -95,23 +111,9 @@ class ArxivClient:
                         data = response.read()
                         root = ET.fromstring(data)
 
-                        if len(root.findall(f'{ATOM_NS}entry')) == 0:
-                            retry_count += 1
-                            if retry_count == max_retries:
-                                logger.warning(
-                                    "No data in returned XML after %d attempts",
-                                    max_retries,
-                                )
-                                xml_str = ET.tostring(root, encoding='unicode', method='xml')
-                                logger.debug("Full XML response: %s", xml_str)
-                                return papers
-                            logger.info(
-                                "No data in returned XML, attempt %d of %d",
-                                retry_count,
-                                max_retries,
-                            )
-                            self.sleep(10)
-                            continue
+                        if len(root.findall(f"{ATOM_NS}entry")) == 0:
+                            logger.info("ArXiv returned no matching papers; stopping retrieval")
+                            return papers
 
                         break
                 except urllib.error.HTTPError as e:
@@ -148,18 +150,20 @@ class ArxivClient:
                     self.sleep(5)
                     continue
 
-            for entry in root.findall(f'{ATOM_NS}entry'):
-                updated_date_str = entry.find(f'{ATOM_NS}updated').text
-                updated_date = datetime.strptime(updated_date_str, '%Y-%m-%dT%H:%M:%S%z')
+            for entry in root.findall(f"{ATOM_NS}entry"):
+                updated_date_str = entry.find(f"{ATOM_NS}updated").text
+                updated_date = datetime.strptime(updated_date_str, "%Y-%m-%dT%H:%M:%S%z")
                 updated_date = updated_date.astimezone(desired_timezone)
 
-                if updated_date > one_day_ago:
+                if updated_date >= window_end:
+                    continue
+                if updated_date >= window_start:
                     papers.append(self._process_paper_entry(entry))
                 else:
                     logger.info(
-                        "Reached cutoff at %s; latest cutoff is %s",
+                        "Reached start of retrieval window at %s (start: %s)",
                         updated_date,
-                        one_day_ago,
+                        window_start,
                     )
                     return papers
 
@@ -171,18 +175,18 @@ class ArxivClient:
                 break
 
         return papers
-    
+
     def extract_titles(self, content):
         """
         Extracts titles from the content using regex.
-        
+
         Titles are assumed to follow the pattern:
         - A number followed by a period (`1.`, `2.`, etc.)
         - The title is enclosed in double asterisks (`**`).
-        
+
         Args:
             content (str): The string content containing the top 5 papers selected by the LLM.
-        
+
         Returns:
             list: A list of titles extracted from the content.
         """
@@ -202,17 +206,16 @@ class ArxivClient:
         Returns:
             list: Filtered dictionaries that match the titles.
         """
+
         def normalize(text):
             # Remove special characters and extra whitespace
-            return re.sub(r'\s+', ' ', text.strip()).replace('\n', '')
+            return re.sub(r"\s+", " ", text.strip()).replace("\n", "")
 
         # Normalize extracted titles for comparison
         normalized_titles = [normalize(title) for title in titles]
 
         # Filter dictionaries whose normalized title matches any in the normalized titles
-        return [item for item in dict_list if normalize(item.get('title', '')) in normalized_titles]
-
-        
+        return [item for item in dict_list if normalize(item.get("title", "")) in normalized_titles]
 
     def get_pdf_url(self, arxiv_url):
         """
@@ -226,13 +229,13 @@ class ArxivClient:
         """
 
         # 1. Extract the arXiv ID from the URL
-        match = re.search(r'abs/([\w\.\/]+)', arxiv_url)
+        match = re.search(r"abs/([\w\.\/]+)", arxiv_url)
         if not match:
             return None
         arxiv_id = match.group(1)
 
         # 2. Construct the API query URL
-        api_url = f'http://export.arxiv.org/api/query?id_list={arxiv_id}'
+        api_url = f"https://export.arxiv.org/api/query?id_list={arxiv_id}"
 
         try:
             # 3. Call the API and get the Atom feed
@@ -244,17 +247,16 @@ class ArxivClient:
 
             # Register the namespaces
             namespaces = {
-                'atom': 'http://www.w3.org/2005/Atom',
-                'arxiv': 'http://arxiv.org/schemas/atom'
+                "atom": "http://www.w3.org/2005/Atom",
+                "arxiv": "http://arxiv.org/schemas/atom",
             }
 
             # 5. Find the PDF link
-            for entry in tree.findall('atom:entry', namespaces):
-                for link in entry.findall('atom:link', namespaces):
-                    if link.get('rel') == 'related' and link.get('title') == 'pdf':
-                        return link.get('href')
+            for entry in tree.findall("atom:entry", namespaces):
+                for link in entry.findall("atom:link", namespaces):
+                    if link.get("rel") == "related" and link.get("title") == "pdf":
+                        return link.get("href")
             return None
-
 
         except urllib.error.URLError as e:
             logger.error(f"Error: Could not retrieve data from the API. {e}")

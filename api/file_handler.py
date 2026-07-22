@@ -14,13 +14,13 @@ class FileHandler:
 
     def _paper_path(self, date=None) -> Path:
         date = date or datetime.today()
-        return self.base_dir / f'papers-{date.strftime("%Y-%m-%d")}.pkl'
+        return self.base_dir / f"papers-{date.strftime('%Y-%m-%d')}.pkl"
 
     def save_papers(self, papers, date=None):
         """Save papers to pickle file"""
         filepath = self._paper_path(date)
         filepath.parent.mkdir(parents=True, exist_ok=True)
-        with filepath.open('wb') as f:
+        with filepath.open("wb") as f:
             pickle.dump(papers, f)
         logger.info("Saved %d papers to %s", len(papers), filepath)
 
@@ -28,6 +28,6 @@ class FileHandler:
         """Load papers from pickle file"""
         filepath = self._paper_path(date)
         if filepath.exists():
-            with filepath.open('rb') as f:
+            with filepath.open("rb") as f:
                 return pickle.load(f)
         return None

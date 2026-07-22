@@ -10,6 +10,9 @@ class SummaryBackend(Protocol):
     def identify_important_papers(self, papers: list[Paper]) -> str:
         """Return a Markdown summary for the supplied papers."""
 
+    def summarize_weekly(self, daily_reports: list[str]) -> str:
+        """Return a weekly Markdown synthesis of daily reports."""
+
 
 def create_summary_backend(config: dict[str, Any], settings: AppSettings) -> SummaryBackend:
     if settings.llm_backend == "openai_api":

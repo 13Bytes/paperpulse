@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}{{ topic.name }} · Paperpulse{% endblock %}
+{% block content %}
+<p class="eyebrow">Topic</p><h1>{{ topic.name }}</h1><p class="lede">{{ topic.description }}</p>
+<div class="term-columns">
+  <section><h2>ArXiv categories</h2><div class="tag-list">{% for term in topic.terms if term.kind == 'category' and term.status == 'active' %}<span>{{ term.value }}</span>{% endfor %}</div></section>
+  <section><h2>Keywords</h2><div class="tag-list">{% for term in topic.terms if term.kind == 'keyword' and term.status == 'active' %}<span>{{ term.value }}</span>{% endfor %}</div></section>
+</div>
+{% if user %}
+<details class="panel"><summary>Suggest categories or keywords</summary>
+  {% if error %}<p class="error">{{ error }}</p>{% endif %}
+  <form action="/topics/{{ topic.slug }}/suggest" method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>ArXiv categories<textarea name="categories" placeholder="cs.AI, cs.RO"></textarea></label>
+    <label>Keywords<textarea name="keywords" placeholder="One per line or comma-separated"></textarea></label>
+    <button>Submit for review</button>
+  </form>
+</details>
+{% endif %}
+<div class="section-heading"><h2>Report archive</h2></div>
+<section class="report-list">{% for report in reports %}<article class="report-card"><span class="pill">{{ report.kind }}</span><h3><a href="/reports/{{ report.id }}">{{ report.title }}</a></h3><p>{{ report.period_start }} – {{ report.period_end }}</p></article>{% else %}<p>No reports yet.</p>{% endfor %}</section>
+{% if page > 1 or has_next %}<nav class="pagination">{% if page > 1 %}<a href="?page={{ page - 1 }}">Newer reports</a>{% endif %}{% if has_next %}<a href="?page={{ page + 1 }}">Older reports</a>{% endif %}</nav>{% endif %}
+{% endblock %}

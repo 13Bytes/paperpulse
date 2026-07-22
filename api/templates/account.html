@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}Account · Paperpulse{% endblock %}
+{% block content %}<p class="eyebrow">Account</p><h1>{{ user.email }}</h1><div class="section-heading"><h2>Your proposals</h2><a class="button" href="/topics/propose">Propose a topic</a></div>
+<section class="report-list">
+{% for topic in topics %}<article class="report-card"><span class="status status-{{ topic.status }}">{{ topic.status }}</span><h3>{{ topic.name }}</h3><p>{{ topic.description }}</p><div class="tag-list">{% for term in topic.terms %}<span>{{ term.kind }}: {{ term.value }} ({{ term.status }})</span>{% endfor %}</div>{% if topic.review_reason %}<p class="muted">Review note: {{ topic.review_reason }}</p>{% endif %}</article>{% endfor %}
+{% for term in terms %}<article class="report-card"><span class="status status-{{ term.status }}">{{ term.status }}</span><h3>{{ term.kind | title }} suggestion for {{ term.topic.name }}</h3><p>{{ term.value }}</p>{% if term.review_reason %}<p class="muted">Review note: {{ term.review_reason }}</p>{% endif %}</article>{% endfor %}
+{% if not topics and not terms %}<p>No proposals yet.</p>{% endif %}</section>
+{% if page > 1 or has_next %}<nav class="pagination">{% if page > 1 %}<a href="?page={{ page - 1 }}">Newer proposals</a>{% endif %}{% if has_next %}<a href="?page={{ page + 1 }}">Older proposals</a>{% endif %}</nav>{% endif %}
+<details class="panel"><summary>Delete account</summary><p>This permanently removes your email, sessions, and subscriptions. Existing proposals may remain without a link to your account.</p><form action="/account/delete" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>Type DELETE to confirm<input name="confirmation" required autocomplete="off"></label><button class="danger">Delete my account</button></form></details>
+{% endblock %}

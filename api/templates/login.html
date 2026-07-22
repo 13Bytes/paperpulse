@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}Sign in · Paperpulse{% endblock %}
+{% block content %}
+<section class="narrow panel"><p class="eyebrow">Passwordless account</p><h1>Sign in by email</h1><p>We’ll send a one-time link. Your current topic choices will merge with your saved selection.</p>
+{% if message %}<p class="callout">{{ message }}</p>{% endif %}
+{% if debug_url %}<p class="callout">Development link: <a href="{{ debug_url }}">continue sign-in</a></p>{% endif %}
+<form action="/login" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>Email address<input type="email" name="email" required autocomplete="email"></label><button>Send sign-in link</button></form></section>
+{% endblock %}

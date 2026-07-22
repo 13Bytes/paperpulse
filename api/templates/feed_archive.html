@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Your feed archive · {{ site.title or 'Paperpulse' }}{% endblock %}
+{% block content %}
+<section class="narrow">
+  <p class="eyebrow">Personalized archive</p>
+  <h1>Your feed</h1>
+  {% if not has_selection %}
+    <div class="empty"><h2>Choose your topics</h2><p>Select at least one active topic to build a personal archive.</p><a class="button" href="/topics">Browse topics</a></div>
+  {% elif not months %}
+    <div class="empty"><h2>No daily reports yet</h2><p>Your selected topics will appear here after their next successful daily run.</p></div>
+  {% else %}
+    {% for month in months %}
+      <section class="archive-month">
+        <h2>{{ month.label }}</h2>
+        <ul class="feed-dates">
+          {% for entry in month.entries %}<li><a href="/feed/{{ entry.date }}">{{ entry.label }}</a></li>{% endfor %}
+        </ul>
+      </section>
+    {% endfor %}
+  {% endif %}
+</section>
+{% endblock %}

@@ -1,19 +1,21 @@
 # ============================================================
 # Paperpulse — central configuration
 # ============================================================
-# Edit this file to change what gets searched, how summaries
-# are written, and how the blog is branded.
+# The application uses this file for branding and summary style.
+# The search section is retained only to seed the first topic
+# through `python -m api.importer`; live topic searches are stored
+# in SQLite and managed through the web application.
 # Environment-sensitive secrets (API keys, etc.) stay in .env
 # ============================================================
 
 blog:
-  title: "Engineering Research Pulse"
-  tagline: "Daily summaries of AI-aided engineering research"
+  title: "Paperpulse"
+  tagline: "Discover research across every field"
   description: >-
-    Daily ArXiv paper summaries focused on agentic engineering,
-    AI-aided design, simulation, and engineering automation.
+    Clear, timely ArXiv paper summaries for researchers across every
+    discipline. Follow the topics that matter to you and build your own research feed.
   # Used as the Jekyll front-matter title for each post
-  post_title: "Daily AI-Aided Engineering Research Summary"
+  post_title: "Daily Research Summary"
 
 search:
   # ArXiv category codes — https://arxiv.org/category_taxonomy
@@ -52,14 +54,12 @@ summarization:
   # Injected as the opening of every system/user prompt.
   # Change this to shift the expertise framing of the LLM.
   persona: >
-    You are a research scientist and professor specialising in AI-aided engineering,
-    agentic systems, and engineering automation. You have deep expertise in areas such
-    as computational design, robotic process automation, digital twins, LLM-based
-    engineering agents, CAD automation, and simulation-driven workflows.
+    You are an interdisciplinary research scientist and experienced science communicator.
+    You can identify important ideas, methods, evidence, and limitations across the natural
+    sciences, formal sciences, social sciences, medicine, engineering, and related fields.
 
   # Injected after the persona. Controls tone and explanation style.
   style: >
-    Explain technical concepts clearly and enthusiastically, like Richard Feynman
-    explaining physics — precise, insightful, and accessible to a senior engineer
-    who is not a specialist in every sub-field. Focus on engineering applications,
-    practical impact, and how methods connect to real design and manufacturing challenges.
+    Explain specialist concepts clearly, precisely, and enthusiastically for researchers
+    who may not be experts in every field. Preserve important nuance, distinguish evidence
+    from speculation, and highlight why each development matters within and across disciplines.

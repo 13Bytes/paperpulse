@@ -13,6 +13,7 @@ from api import agent as agent_module
 from api import main as main_module
 from api.agent import PaperpulseAgent
 from api.arxiv_client import ArxivClient
+from api.auth import send_magic_link
 from api.codex_agent import CodexCliAgent
 from api.file_handler import FileHandler
 from api.settings import AppSettings, build_arxiv_query, load_app_settings, load_config, parse_bool
@@ -109,6 +110,7 @@ def test_load_app_settings_codex_backend(monkeypatch, tmp_path):
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
     monkeypatch.setenv("CODEX_MODEL", "gpt-5")
     monkeypatch.setenv("CODEX_TIMEOUT_SECONDS", "123")
+    monkeypatch.setenv("SESSION_SECRET", "test-production-secret")
 
     settings = load_app_settings()
 
@@ -125,6 +127,68 @@ def test_load_app_settings_rejects_invalid_backend(monkeypatch):
 
     with pytest.raises(ValueError, match="LLM_BACKEND"):
         load_app_settings()
+
+
+def test_send_magic_link_uses_implicit_tls_on_port_465(monkeypatch, tmp_path):
+    calls = []
+
+    class FakeSMTP:
+        def __init__(self, host, port, **kwargs):
+            calls.append(("connect", host, port, kwargs))
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def starttls(self, **_kwargs):
+            calls.append(("starttls",))
+
+        def login(self, username, password):
+            calls.append(("login", username, password))
+
+        def send_message(self, message):
+            calls.append(("send", message["To"]))
+
+    monkeypatch.setattr("api.auth.smtplib.SMTP_SSL", FakeSMTP)
+    monkeypatch.setattr(
+        "api.auth.smtplib.SMTP",
+        lambda *_args, **_kwargs: pytest.fail("Port 465 must use implicit TLS"),
+    )
+    settings = AppSettings(
+        project_env="test",
+        project_dir=tmp_path,
+        openai_model="unused",
+        smtp_host="smtp.example.com",
+        smtp_port=465,
+        smtp_username="sender@example.com",
+        smtp_password="secret",
+        smtp_starttls=True,
+    )
+
+    send_magic_link(settings, "reader@example.com", "token")
+
+    assert calls[0][0:3] == ("connect", "smtp.example.com", 465)
+    assert "context" in calls[0][3]
+    assert ("starttls",) not in calls
+    assert calls[-1] == ("send", "reader@example.com")
+
+
+def test_send_magic_link_wraps_smtp_failures(monkeypatch, tmp_path):
+    def fail_connect(*_args, **_kwargs):
+        raise TimeoutError("SMTP timed out")
+
+    monkeypatch.setattr("api.auth.smtplib.SMTP", fail_connect)
+    settings = AppSettings(
+        project_env="test",
+        project_dir=tmp_path,
+        openai_model="unused",
+        smtp_host="smtp.example.com",
+    )
+
+    with pytest.raises(RuntimeError, match="couldn't send"):
+        send_magic_link(settings, "reader@example.com", "token")
 
 
 class TestArxivClient:
@@ -146,7 +210,7 @@ class TestArxivClient:
                 <author><name>Ada Lovelace</name></author>
                 <summary>Summary 1</summary>
                 <id>https://arxiv.org/abs/2601.00001</id>
-                <updated>2026-01-02T12:00:00Z</updated>
+                <updated>2026-01-02T11:59:59Z</updated>
             </entry>
             <entry>
                 <title>Still recent</title>
@@ -166,11 +230,38 @@ class TestArxivClient:
         """
         client = ArxivClient(urlopen=lambda _url: FakeResponse(feed), sleep=lambda _seconds: None)
 
-        papers = client.retrieve_daily_results(
-            now=datetime(2026, 1, 2, 12, tzinfo=UTC)
-        )
+        papers = client.retrieve_daily_results(now=datetime(2026, 1, 2, 12, tzinfo=UTC))
 
         assert [paper["title"] for paper in papers] == ["Newest", "Still recent"]
+
+    def test_retrieve_daily_results_uses_explicit_half_open_window(self):
+        feed = """<?xml version="1.0" encoding="UTF-8"?>
+        <feed xmlns="http://www.w3.org/2005/Atom">
+            <entry><title>After window</title><author><name>A</name></author>
+              <summary>Later</summary><id>https://arxiv.org/abs/1</id>
+              <updated>2026-01-02T07:00:00Z</updated></entry>
+            <entry><title>At window end</title><author><name>B</name></author>
+              <summary>Boundary</summary><id>https://arxiv.org/abs/2</id>
+              <updated>2026-01-02T06:00:00Z</updated></entry>
+            <entry><title>Inside window</title><author><name>C</name></author>
+              <summary>Inside</summary><id>https://arxiv.org/abs/3</id>
+              <updated>2026-01-02T05:59:59Z</updated></entry>
+            <entry><title>At window start</title><author><name>D</name></author>
+              <summary>Boundary</summary><id>https://arxiv.org/abs/4</id>
+              <updated>2026-01-01T06:00:00Z</updated></entry>
+            <entry><title>Before window</title><author><name>E</name></author>
+              <summary>Earlier</summary><id>https://arxiv.org/abs/5</id>
+              <updated>2026-01-01T05:59:59Z</updated></entry>
+        </feed>
+        """
+        client = ArxivClient(urlopen=lambda _url: FakeResponse(feed), sleep=lambda _seconds: None)
+
+        papers = client.retrieve_daily_results(
+            window_start=datetime(2026, 1, 1, 6, tzinfo=UTC),
+            window_end=datetime(2026, 1, 2, 6, tzinfo=UTC),
+        )
+
+        assert [paper["title"] for paper in papers] == ["Inside window", "At window start"]
 
     def test_retrieve_daily_results_returns_partial_results_after_retries(self):
         sleeps = []
@@ -181,6 +272,21 @@ class TestArxivClient:
 
         assert client.retrieve_daily_results(max_retries=2) == []
         assert sleeps == [5]
+
+    def test_retrieve_daily_results_treats_empty_feed_as_a_successful_no_op(self):
+        calls = []
+        sleeps = []
+
+        def empty_feed(url):
+            calls.append(url)
+            return FakeResponse('<feed xmlns="http://www.w3.org/2005/Atom"></feed>')
+
+        client = ArxivClient(urlopen=empty_feed, sleep=sleeps.append)
+
+        assert client.retrieve_daily_results() == []
+        assert len(calls) == 1
+        assert calls[0].startswith("https://export.arxiv.org/")
+        assert sleeps == []
 
     def test_retrieve_daily_results_handles_malformed_xml(self):
         client = ArxivClient(
@@ -200,7 +306,10 @@ class TestArxivClient:
         """
         client = ArxivClient(urlopen=lambda _url: FakeResponse(feed))
 
-        assert client.get_pdf_url("https://arxiv.org/abs/1234.5678") == "https://arxiv.org/pdf/1234.5678"
+        assert (
+            client.get_pdf_url("https://arxiv.org/abs/1234.5678")
+            == "https://arxiv.org/pdf/1234.5678"
+        )
 
     def test_extract_and_filter_titles(self):
         client = ArxivClient()
@@ -277,8 +386,8 @@ class TestPaperpulseAgent:
 
         assert summary == "combined summary"
         assert [call[0] for call in FakeRunner.calls] == [
-            "Engineering Research Summariser",
-            "Engineering Research Summariser",
+            "Interdisciplinary Research Summariser",
+            "Interdisciplinary Research Summariser",
             "Summary Combiner",
         ]
 
@@ -401,50 +510,18 @@ def test_create_summary_backend_selects_codex_cli(tmp_path):
     assert isinstance(create_summary_backend({}, settings), CodexCliAgent)
 
 
-def test_main_uses_selected_summary_backend(monkeypatch, tmp_path, sample_paper):
-    class FakeArxivClient:
-        def __init__(self, *_args):
-            pass
-
-        def retrieve_daily_results(self):
-            return [sample_paper]
-
-    class FakeBackend:
-        def identify_important_papers(self, papers):
-            assert papers == [sample_paper]
-            return "Summary with Test Paper Title"
-
-    created_posts = []
-    settings = AppSettings(
-        project_env="prod",
-        project_dir=tmp_path,
-        openai_model="test-model",
-        llm_backend="codex_cli",
-    )
-
+def test_main_runs_multi_topic_daily_job(monkeypatch):
     monkeypatch.setattr(main_module, "load_dotenv", lambda: None)
-    monkeypatch.setattr(main_module, "load_app_settings", lambda: settings)
-    monkeypatch.setattr(main_module, "load_config", lambda: {})
-    monkeypatch.setattr(main_module, "ArxivClient", FakeArxivClient)
     monkeypatch.setattr(
         main_module,
-        "create_summary_backend",
-        lambda config, app_settings: FakeBackend(),
-    )
-    monkeypatch.setattr(
-        main_module,
-        "create_blogpost",
-        lambda summary, num_papers, config, settings: (
-            created_posts.append((summary, num_papers, config, settings))
-            or tmp_path / "post.md"
-        ),
+        "run_daily",
+        lambda: SimpleNamespace(succeeded=2, skipped=1, failed=0),
     )
 
     result = main_module.main()
 
     assert result.ok is True
-    assert created_posts[0][1] == 1
-    assert created_posts[0][3] is settings
+    assert result.message == "Daily topic run complete: 2 published, 1 skipped, 0 failed"
 
 
 class TestFileHandler:
@@ -474,8 +551,7 @@ def test_add_markdown_links_links_titles_and_author_citations():
 
     assert '<a href="http://example.com/2501.00001" target="_blank">Paper One</a>' in result
     assert (
-        '<a href="http://example.com/2501.00001" target="_blank">Smith et al. (2025)</a>'
-        in result
+        '<a href="http://example.com/2501.00001" target="_blank">Smith et al. (2025)</a>' in result
     )
 
 
@@ -513,16 +589,10 @@ def test_create_blogpost_creates_directory_and_safe_front_matter(tmp_path):
     assert "Test summary content" in content
 
 
-def test_jekyll_branding_comes_only_from_central_config():
+def test_compose_uses_web_scheduler_and_sqlite_data_volume():
     project_root = Path(__file__).parents[2]
-    config_text = (project_root / "blog" / "_config.yml").read_text(encoding="utf-8")
-    # BaseLoader tolerates Jekyll's custom !ENV tag; scalar types are irrelevant here.
-    jekyll_config = yaml.load(config_text, Loader=yaml.BaseLoader)
-
-    assert not {"title", "tagline", "description"} & jekyll_config.keys()
-    assert (project_root / "blog" / "_plugins" / "paperpulse_config.rb").is_file()
-
-    expected_mount = "./config.yaml:/srv/jekyll/_data/paperpulse.yml:ro"
     for compose_name in ("docker-compose.yml", "docker-compose.prod.yml"):
         compose = yaml.safe_load((project_root / compose_name).read_text(encoding="utf-8"))
-        assert expected_mount in compose["services"]["blog"]["volumes"]
+        assert {"migrate", "web", "scheduler"} <= compose["services"].keys()
+        assert "blog" not in compose["services"]
+        assert "./data:/app/data" in compose["services"]["web"]["volumes"]
